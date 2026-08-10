@@ -285,6 +285,14 @@ def run(args: argparse.Namespace) -> None:
     mp.set_start_method("forkserver", force=True)
     _install_torchvision_v2_compatibility()
     _verify_installed_platform()
+    import stable_pretraining as spt
+
+    run_root = Path(args.run_root).expanduser().resolve()
+    spt.set(
+        cache_dir=str(run_root / "spt"),
+        default_callbacks={"unused_params": False},
+        requeue_checkpoint_every_n_steps=1000,
+    )
     if args.env != "pusht" or args.method != "lewm":
         raise NotImplementedError(
             "The first executable TDWM entry supports only --env pusht "
@@ -374,7 +382,6 @@ def run(args: argparse.Namespace) -> None:
         f"{args.method}_{args.env}_seed{args.seed}_"
         f"{training['epochs']}ep_{commit[:8]}"
     )
-    run_root = Path(args.run_root).expanduser().resolve()
     run_dir = run_root / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
