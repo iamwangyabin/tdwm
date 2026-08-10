@@ -9,8 +9,9 @@ configs/
 ```
 
 训练时直接选择一个环境配置和一个方法配置进行组合，不再维护额外的矩阵文件。
-完整实验仍然是 4 个环境 × 7 个方法；默认使用训练种子 `0, 1, 2`。未来训练
-入口采用两个明确参数，例如 `--env pusht --method lewm --seed 0`。
+完整实验仍然是 4 个环境 × 7 个方法。当前只执行一个训练种子；首个 LeWM PushT
+运行沿用已记录诊断实验的 `seed=3072`。只有用户明确决定扩大统计评测后才增加其他
+种子。训练入口采用明确参数，例如 `--env pusht --method lewm --seed 3072`。
 
 ## 当前矩阵状态
 
@@ -36,7 +37,7 @@ reward-free、任意目标条件控制。没有先确定 goal-conditioned reward
 
 - 固定依赖：`stable-worldmodel[all]==0.1.1`；
 - 主结果使用相同离线数据、训练/验证划分、评测 episode、起点、目标偏移和预算；
-- 训练随机种子：`0, 1, 2`；
+- 当前训练随机种子：`3072`（单 seed）；
 - 数据按 episode 使用固定种子 42 划分，不能让不同方法重新随机划分；
 - 每次评测 50 条轨迹，目标偏移 25 个环境步，执行预算 50 个环境步；
 - world model 统一使用 CEM：300 candidates、30 elites、horizon 5、action block 5；
@@ -70,7 +71,7 @@ data/lewm-pusht/pusht_expert_train.h5.zst
 
 ## 执行边界
 
-这些文件现在是实验配置的唯一事实来源。项目尚未实现 `scripts/train.py` 和
-`scripts/evaluate.py`，因此本次只建立配置与协议，不声称训练命令已经可用。后续
-训练入口必须通过 `import stable_worldmodel as swm` 使用 `0.1.1` 的公开 API，
-并读取这些配置进行组合，不能复制上游训练脚本。
+这些文件现在是实验配置的唯一事实来源。`scripts/train.py` 已实现第一个可执行组合：
+LeWM + PushT；其他组合以及 `scripts/evaluate.py` 尚未实现。训练入口通过
+`import stable_worldmodel as swm` 使用已安装的 `0.1.1`，读取这里的配置进行组装，
+不复制或修改上游训练脚本。
