@@ -1,0 +1,78 @@
+schema_version: 1
+id: tdmpc2
+display_name: TD-MPC2
+family: reward_conditioned_world_model
+protocol: offline_reward_conditioned
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  api: swm.wm.tdmpc2.TDMPC2
+
+comparability:
+  main_lewm_suite: false
+  requires_protocol_decision: true
+  reason: TD-MPC2 requires rewards and learns reward/Q functions; the four-environment LeWM protocol is reward-free and samples goals after training.
+
+input:
+  pixels: false
+  state_key: infer_state_like_column
+  goal_state_concatenation: true
+  action_dimension: infer_from_dataset
+  require_actions_in_range: [-1.0, 1.0]
+
+sequence:
+  horizon: 5
+  num_steps: 6
+
+model:
+  mlp_dimension: 384
+  encoder_dimension: 256
+  state_embedding_dimension: 128
+  simnorm_dimension: 8
+  q_ensemble_size: 5
+  num_value_bins: 101
+  value_min: -6
+  value_max: 2
+  rho: 0.5
+  tau: 0.01
+
+loss:
+  consistency_coefficient: 20.0
+  reward_coefficient: 0.1
+  value_coefficient: 0.1
+  discount: 0.99
+  uncertainty_penalty: 0.5
+  entropy_coefficient: 0.0001
+
+training:
+  epochs: 250
+  batch_size: 256
+  train_fraction: 0.9
+  precision: 16-mixed
+  gradient_clip: 20.0
+  required_dataset_columns:
+    - action
+    - reward
+  optimizer:
+    type: AdamW
+    learning_rate: 0.0003
+    encoder_learning_rate_scale: 0.3
+
+planning:
+  solver: mppi
+  iterations: 12
+  num_samples: 1024
+  num_elites: 64
+  num_policy_trajectories: 256
+  min_std: 0.01
+  max_std: 0.1
+  temperature: 0.5
+
+checkpoint:
+  resume: true
+  save_every_epochs: 1
+
+provenance:
+  paper: https://arxiv.org/abs/2310.16828
+  released_config: https://github.com/galilai-group/stable-worldmodel/blob/15a5538d492ae524c64cb18cc56a2d70611e877e/scripts/train/config/tdmpc2.yaml

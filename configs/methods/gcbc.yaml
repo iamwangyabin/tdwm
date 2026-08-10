@@ -1,0 +1,62 @@
+schema_version: 1
+id: gcbc
+display_name: GCBC
+family: goal_conditioned_policy
+protocol: offline_goal_conditioned_imitation
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  api: swm.wm.GCRL
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+sequence:
+  frameskip: 1
+  history_size: 3
+  num_predictions: 1
+  num_steps: 3
+
+model:
+  encoder:
+    type: dinov2_small
+    pretrained: true
+    frozen: true
+    patch_size: 14
+  action_predictor:
+    depth: 6
+    heads: 16
+    mlp_dimension: 2048
+    head_dimension: 64
+    dropout: 0.0
+
+goal_sampling:
+  random: 0.0
+  geometric_future: 0.0
+  uniform_future: 1.0
+  current: 0.0
+
+loss:
+  behavior_cloning: mse
+
+training:
+  epochs: 100
+  batch_size: 128
+  train_fraction: 0.9
+  precision: bf16-mixed
+  optimizer:
+    type: AdamW
+    predictor_learning_rate: 0.0001
+    encoder_learning_rate: 0.0001
+
+checkpoint:
+  resume: true
+  save_every_epochs: 1
+
+provenance:
+  comparison_protocol: https://arxiv.org/pdf/2603.19312
+  released_config: https://github.com/galilai-group/stable-worldmodel/blob/15a5538d492ae524c64cb18cc56a2d70611e877e/scripts/train/config/gcbc.yaml

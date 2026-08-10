@@ -1,0 +1,64 @@
+schema_version: 1
+id: pusht
+display_name: PushT
+task: 2d_contact_manipulation
+
+dataset:
+  source:
+    repository: quentinll/lewm-pusht
+    repository_type: dataset
+    archive: pusht_expert_train.h5.zst
+    compressed_size_bytes: 13136247974
+    manual_decompression_required: true
+    local_archive_hint: data/lewm-pusht/pusht_expert_train.h5.zst
+  installed:
+    root_environment_variable: STABLEWM_HOME
+    train_name: pusht_expert_train.h5
+    eval_name: pusht_expert_train.h5
+    format: hdf5
+  paper:
+    episodes: 20000
+    average_episode_steps: 196
+    behavior: expert
+  training_loader:
+    keys_to_load: [pixels, action, proprio, state]
+    keys_to_cache: [action, proprio, state]
+    split:
+      unit: episode
+      seed: 42
+      train: 0.9
+      validation: 0.1
+  evaluation_loader:
+    keys_to_load: all
+    keys_to_cache: [action, proprio, state]
+
+world:
+  env_name: swm/PushT-v1
+  image_size: 224
+  max_episode_steps: 50
+
+evaluation:
+  mode: dataset
+  episodes: 50
+  goal_offset_steps: 25
+  budget_steps: 50
+  seed: 42
+  callables:
+    - method: _set_state
+      args:
+        state:
+          dataset_key: state
+    - method: _set_goal_state
+      args:
+        goal_state:
+          dataset_key: goal_state
+
+planning:
+  solver: cem
+  horizon: 5
+  receding_horizon: 5
+  action_block: 5
+  candidates: 300
+  elites: 30
+  iterations: 30
+  initial_variance: 1.0

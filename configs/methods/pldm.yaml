@@ -1,0 +1,91 @@
+schema_version: 1
+id: pldm
+display_name: PLDM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  api: swm.wm.pldm.PLDM
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+sequence:
+  frameskip: 5
+  history_size: 3
+  num_predictions: 1
+  num_steps: 4
+
+model:
+  encoder:
+    type: vit_tiny
+    pretrained: false
+    patch_size: 14
+    embedding_dimension: 192
+  predictor:
+    depth: 6
+    heads: 16
+    mlp_dimension: 2048
+    head_dimension: 64
+    dropout: 0.1
+  projector:
+    hidden_dimension: 2048
+    normalization: batch_norm_1d
+  inverse_dynamics:
+    hidden_dimension: 512
+    input_dimension: infer_from_model
+    output_dimension: infer_from_dataset
+
+loss:
+  prediction:
+    enabled: true
+    weight: 1.0
+  sigreg:
+    enabled: true
+    weight: 0.0
+  temporal_straightening:
+    enabled: false
+    weight: 0.1
+  variance:
+    enabled: true
+    weight: 18.0
+  temporal_variance:
+    enabled: true
+    weight: 0.7
+  covariance:
+    enabled: true
+    weight: 12.0
+  temporal_covariance:
+    enabled: true
+    weight: 0.0
+  temporal_alignment:
+    enabled: true
+    weight: 0.2
+  inverse_dynamics:
+    enabled: true
+    weight: 0.0
+
+training:
+  epochs: 10
+  batch_size: 128
+  train_fraction: 0.9
+  precision: bf16-mixed
+  gradient_clip: 1.0
+  optimizer:
+    type: AdamW
+    learning_rate: 0.00005
+    weight_decay: 0.001
+
+checkpoint:
+  resume: true
+  save_every_epochs: 5
+
+provenance:
+  paper: https://arxiv.org/pdf/2502.14819
+  comparison_protocol: https://arxiv.org/pdf/2603.19312
+  released_config: https://github.com/galilai-group/stable-worldmodel/blob/15a5538d492ae524c64cb18cc56a2d70611e877e/scripts/train/config/pldm.yaml

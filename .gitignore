@@ -1,0 +1,43 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local world-model data and generated artifacts
+data/
+outputs/
+checkpoints/
+models/
+runs/
+artifacts/
+videos/
+wandb/
+lightning_logs/
+.cache/
+tmp/
+
+# Datasets, model weights, checkpoints, and raw run outputs
+*.h5
+*.hdf5
+*.lance/
+*.parquet
+*.zst
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.mp4
+*.log
+*.tmp
+*.aria2
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store

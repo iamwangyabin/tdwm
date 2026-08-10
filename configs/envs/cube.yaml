@@ -1,0 +1,79 @@
+schema_version: 1
+id: cube
+display_name: OGBench-Cube (single)
+task: 3d_pick_and_place
+
+dataset:
+  source:
+    repository: quentinll/lewm-cube
+    repository_type: dataset
+    archive: cube_single_expert.tar.zst
+    compressed_size_bytes: 46184624478
+    manual_decompression_required: true
+  installed:
+    root_environment_variable: STABLEWM_HOME
+    train_name: ogbench/cube_single_expert.h5
+    eval_name: ogbench/cube_single_expert.h5
+    format: hdf5
+  paper:
+    episodes: 10000
+    episode_steps: 200
+    behavior: ogbench_collection_heuristic
+  training_loader:
+    keys_to_load: [pixels, action, observation]
+    keys_to_cache: [action, observation]
+    keys_to_merge:
+      proprio: observation
+    split:
+      unit: episode
+      seed: 42
+      train: 0.9
+      validation: 0.1
+  evaluation_loader:
+    keys_to_load: all
+    keys_to_cache: [action]
+
+world:
+  env_name: swm/OGBCube-v0
+  image_size: 224
+  max_episode_steps: 50
+  kwargs:
+    env_type: single
+    ob_type: states
+    multiview: false
+    width: 224
+    height: 224
+    visualize_info: false
+    terminate_at_goal: true
+
+evaluation:
+  mode: dataset
+  episodes: 50
+  goal_offset_steps: 25
+  budget_steps: 50
+  seed: 42
+  callables:
+    - method: set_state
+      args:
+        qpos:
+          dataset_key: qpos
+        qvel:
+          dataset_key: qvel
+    - method: set_target_pos
+      args:
+        cube_id:
+          literal: 0
+        target_pos:
+          dataset_key: goal_privileged_block_0_pos
+        target_quat:
+          dataset_key: goal_privileged_block_0_quat
+
+planning:
+  solver: cem
+  horizon: 5
+  receding_horizon: 5
+  action_block: 5
+  candidates: 300
+  elites: 30
+  iterations: 10
+  initial_variance: 1.0

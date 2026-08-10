@@ -1,0 +1,69 @@
+schema_version: 1
+id: dino_wm
+display_name: DINO-WM (pixels-only)
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  api: swm.wm.PreJEPA
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+sequence:
+  frameskip: 5
+  history_size: 3
+  num_predictions: 1
+  num_steps: 4
+
+model:
+  encoder:
+    type: dinov2_small
+    pretrained: true
+    frozen: true
+    patch_size: 14
+  action_encoder:
+    embedding_dimension: 10
+  predictor:
+    size: small
+    depth: 6
+    heads: 16
+    mlp_dimension: 2048
+    head_dimension: 64
+    dropout: 0.1
+
+loss:
+  prediction: mse
+  target_stop_gradient: true
+
+training:
+  epochs: 10
+  batch_size: 32
+  train_fraction: 0.9
+  precision: 16-mixed
+  gradient_clip: 1.0
+  optimizer:
+    type: AdamW
+    learning_rate: 0.0005
+    weight_decay: 0.0
+
+checkpoint:
+  resume: true
+  save_every_epochs: 1
+
+variants:
+  proprioception:
+    report_separately: true
+    primary_result: false
+    embedding_dimension: 10
+
+provenance:
+  paper: https://arxiv.org/abs/2411.04983
+  comparison_protocol: https://arxiv.org/pdf/2603.19312
+  released_config: https://github.com/galilai-group/stable-worldmodel/blob/15a5538d492ae524c64cb18cc56a2d70611e877e/scripts/train/config/prejepa.yaml
+  note: The primary fair-comparison setting is pixels-only; +proprio is an ablation.

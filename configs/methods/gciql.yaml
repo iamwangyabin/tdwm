@@ -1,0 +1,74 @@
+schema_version: 1
+id: gciql
+display_name: GCIQL
+family: goal_conditioned_policy
+protocol: offline_goal_conditioned_rl
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  api: swm.wm.GCRL
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+sequence:
+  frameskip: 1
+  history_size: 3
+  td_offset: 1
+  num_steps: 4
+
+model:
+  encoder:
+    type: dinov2_small
+    pretrained: true
+    frozen: true
+    patch_size: 14
+  predictor:
+    depth: 6
+    heads: 16
+    mlp_dimension: 2048
+    head_dimension: 64
+    dropout: 0.0
+
+rl:
+  discount: 0.99
+  expectile: 0.9
+  advantage_weight_temperature: 10.0
+  value_ema_tau: 0.995
+  goal_gamma: 0.99
+  value_goal_sampling:
+    random: 0.3
+    geometric_future: 0.5
+    uniform_future: 0.0
+    current: 0.2
+  actor_goal_sampling:
+    random: 0.5
+    geometric_future: 0.0
+    uniform_future: 0.5
+    current: 0.0
+
+training:
+  epochs: 100
+  batch_size: 32
+  train_fraction: 0.9
+  precision: bf16-mixed
+  gradient_clip: 1.0
+  optimizer:
+    type: AdamW
+    predictor_learning_rate: 0.0003
+    action_encoder_learning_rate: 0.0003
+    encoder_learning_rate: 0.0003
+
+checkpoint:
+  resume: true
+  stages:
+    - value_and_q
+    - policy
+
+provenance:
+  comparison_protocol: https://arxiv.org/pdf/2603.19312
+  released_config: https://github.com/galilai-group/stable-worldmodel/blob/15a5538d492ae524c64cb18cc56a2d70611e877e/scripts/train/config/gciql.yaml
