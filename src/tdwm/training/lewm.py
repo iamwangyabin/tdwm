@@ -27,6 +27,29 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
+def _install_torchvision_v2_compatibility() -> None:
+    """Bridge APIs missing from the torchvision version bundled on Gemini."""
+    from torchvision.transforms import v2
+
+    if not hasattr(v2.Transform, "transform"):
+
+        def transform(instance: Any, value: Any, params: dict[str, Any]) -> Any:
+            return instance._transform(value, params)
+
+        v2.Transform.transform = transform
+
+    if not hasattr(v2.Transform, "make_params"):
+
+        def make_params(instance: Any, flat_inputs: list[Any]) -> dict[str, Any]:
+            return instance._get_params(flat_inputs)
+
+        v2.Transform.make_params = make_params
+
+    for name in ("GaussianNoise", "RGB"):
+        if not hasattr(v2, name):
+            setattr(v2, name, type(f"_{name}Compatibility", (), {}))
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -260,6 +283,7 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> None:
     mp.set_start_method("forkserver", force=True)
+    _install_torchvision_v2_compatibility()
     _verify_installed_platform()
     if args.env != "pusht" or args.method != "lewm":
         raise NotImplementedError(
