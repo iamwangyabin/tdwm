@@ -9,6 +9,58 @@ implementation:
   version: 0.1.1
   api: swm.wm.pldm.PLDM
 
+# Declarative copy of the released 0.1.1 architecture. The training adapter
+# only resolves the action width from the selected dataset.
+factory:
+  _target_: stable_worldmodel.wm.pldm.pldm.PLDM
+  encoder:
+    _target_: transformers.ViTModel
+    config:
+      _target_: transformers.ViTConfig
+      hidden_size: 192
+      num_hidden_layers: 12
+      num_attention_heads: 3
+      intermediate_size: 768
+      image_size: 224
+      patch_size: 14
+      num_channels: 3
+      qkv_bias: true
+    add_pooling_layer: false
+    use_mask_token: false
+  predictor:
+    _target_: stable_worldmodel.wm.pldm.module.Predictor
+    num_frames: 3
+    input_dim: 192
+    hidden_dim: 192
+    output_dim: 192
+    depth: 6
+    heads: 16
+    mlp_dim: 2048
+    dim_head: 64
+    dropout: 0.1
+    emb_dropout: 0.0
+  action_encoder:
+    _target_: stable_worldmodel.wm.pldm.module.Embedder
+    input_dim: infer_from_dataset
+    smoothed_dim: 10
+    emb_dim: 192
+  projector:
+    _target_: stable_worldmodel.wm.pldm.module.MLP
+    input_dim: 192
+    hidden_dim: 2048
+    output_dim: 192
+    norm_fn:
+      _target_: torch.nn.BatchNorm1d
+      _partial_: true
+  pred_proj:
+    _target_: stable_worldmodel.wm.pldm.module.MLP
+    input_dim: 192
+    hidden_dim: 2048
+    output_dim: 192
+    norm_fn:
+      _target_: torch.nn.BatchNorm1d
+      _partial_: true
+
 input:
   pixels: true
   proprioception: false

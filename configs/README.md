@@ -71,7 +71,8 @@ data/lewm-pusht/pusht_expert_train.h5.zst
 
 ## 执行边界
 
-这些文件现在是实验配置的唯一事实来源。`scripts/train.py` 已实现第一个可执行组合：
-LeWM + PushT；其他组合以及 `scripts/evaluate.py` 尚未实现。训练入口通过
-`import stable_worldmodel as swm` 使用已安装的 `0.1.1`，读取这里的配置进行组装，
-不复制或修改上游训练脚本。
+这些文件现在是实验配置的唯一事实来源。`scripts/train.py` 已实现 PushT 上的
+LeWM、PLDM、DINO-WM、GCBC、GCIVL 和 GCIQL；其他环境组合以及
+`scripts/evaluate.py` 尚未实现。GCIVL/GCIQL 分别保留价值（或 V/Q）和策略两个
+阶段。训练入口通过 `import stable_worldmodel as swm` 使用已安装的 `0.1.1`，读取
+这里的配置进行轻量组装，不复制或修改上游训练脚本。
