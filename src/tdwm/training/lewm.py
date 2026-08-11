@@ -292,7 +292,6 @@ def run(args: argparse.Namespace) -> None:
     spt.set(
         cache_dir=str(run_root / "spt"),
         default_callbacks={"unused_params": False},
-        requeue_checkpoint_every_n_steps=1000,
     )
     if args.env != "pusht" or args.method != "lewm":
         raise NotImplementedError(

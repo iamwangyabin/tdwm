@@ -848,7 +848,6 @@ def run(args: Any) -> None:
     spt.set(
         cache_dir=str(run_root / "spt"),
         default_callbacks={"unused_params": False},
-        requeue_checkpoint_every_n_steps=1000,
     )
     dataset_path = Path(args.dataset).expanduser().resolve()
     if not dataset_path.exists():
