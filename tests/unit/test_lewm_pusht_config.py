@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import tomllib
 
@@ -36,3 +37,26 @@ def test_first_executable_experiment_matches_lewm_pusht_protocol() -> None:
     assert method["loss"]["sigreg"]["weight"] == 0.09
     assert method["training"]["epochs"] == 10
     assert method["training"]["batch_size"] == 128
+
+
+def test_checkpoint_export_converts_plain_mapping_to_omegaconf() -> None:
+    source = (ROOT / "src/tdwm/training/lewm.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    save_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "save_pretrained"
+    ]
+
+    assert len(save_calls) == 1
+    config = next(
+        keyword.value
+        for keyword in save_calls[0].keywords
+        if keyword.arg == "config"
+    )
+    assert isinstance(config, ast.Call)
+    assert isinstance(config.func, ast.Attribute)
+    assert isinstance(config.func.value, ast.Name)
+    assert (config.func.value.id, config.func.attr) == ("OmegaConf", "create")

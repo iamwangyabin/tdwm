@@ -19,6 +19,7 @@ import torch
 import yaml
 from hydra.utils import instantiate
 from lightning.pytorch.loggers import CSVLogger
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, random_split
 
 
@@ -268,7 +269,7 @@ class ExperimentCheckpoint(pl.Callback):
         swm.wm.save_pretrained(
             pl_module.model,
             run_name=self.run_id,
-            config=self.model_config,
+            config=OmegaConf.create(self.model_config),
             filename=f"weights_epoch_{trainer.current_epoch + 1}.pt",
             cache_dir=str(self.run_root),
         )
