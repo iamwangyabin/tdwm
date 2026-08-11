@@ -1,0 +1,24 @@
+# TDWM CUDA 12.1 container constraints.
+#
+# stable-worldmodel remains the single project dependency in pyproject.toml.
+# These constraints make its broad [all] extra reproducible on the selected
+# official PyTorch image and prevent pip from silently replacing the CUDA stack.
+stable-worldmodel==0.1.1
+stable-pretraining==0.1.8
+
+torch==2.4.1
+torchvision==0.19.1
+torchaudio==2.4.1
+
+lightning==2.4.0
+pytorch-lightning==2.4.0
+transformers==4.50.3
+datasets==2.20.0
+
+numpy==2.0.2
+pillow==11.3.0
+pyarrow==20.0.0
+scikit-learn==1.7.0
+
+lancedb==0.37.1
+pylance==10.0.0
