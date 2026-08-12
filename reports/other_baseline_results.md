@@ -1,13 +1,25 @@
 # 其他 World Model 实验结果与复现优先级
 
 记录日期：2026-08-09<br>
-最后更新：2026-08-11
+最后更新：2026-08-12
 
 ## 目的
 
 TD-MPC2 CartPole 只用于确认环境、训练、规划和 checkpoint 链路能够工作，不能代表
 本项目最终研究任务。本文整理 Stable World Model / LeWM 相关工作的公开实验结果，
 区分论文结果、第三方复现和我们自己的服务器结果，并据此确定下一步 baseline。
+
+本文只负责**数值来源与复现状态**，不再承担完整的创新性比较。RL-assisted LeWM 与
+value-aware model learning、bisimulation、zero-shot RL、self-predictive RL 及 2026 年
+直接 JEPA 改进的系统审计见
+[`rl_assisted_lewm_related_work_review.md`](rl_assisted_lewm_related_work_review.md)。研究
+提案见 [`rl_assisted_lewm_research_proposal.md`](rl_assisted_lewm_research_proposal.md)。
+
+三类证据必须严格分开：
+
+1. **文献机制比较**：判断主张是否已被覆盖，不产生本项目性能结论；
+2. **作者报告数值**：只用于选择任务和估计上限，协议不一致时不得横向排名；
+3. **本项目受控复现**：只有相同数据、planner、预算和多 seed 才能支持方法比较。
 
 ## 结果来源与口径
 
@@ -138,6 +150,27 @@ ViT-S、5-frame 的 94.67% 接近论文的 `96.0 ± 2.83`。同时，更多输�
 它说明超过 LeWM 的公开目标已经提升到四任务平均 90.5%–92.0%。不过这是后续方法，
 当前阶段应先作为上限参照，不应跳过原始 baseline 复现直接与它比较。
 
+## 2026 年直接 LeWM/JEPA 对照版图
+
+Fast-LeWM 已不是唯一需要考虑的后续工作。下列方法分别改变了监督、representation、
+predictor 或 planner cost，不能只把作者报告的最好数字追加到同一个排行榜：
+
+| 方法 | 主要新增信号 | 是否使用真实 reward/状态监督 | 应在哪个比较中出现 |
+| --- | --- | --- | --- |
+| Value-Guided JEPA | goal-conditioned value / quasi-distance | goal-reaching value | reward-labelled 或 goal-value 协议 |
+| Reward-free bisimulation JEPA | transition-behavior equivalence | 无环境 reward；通常配冻结视觉 encoder | 视觉 OOD 与 control-invariance 专项 |
+| RC-Aux | multi-horizon、budget reachability、temporal negatives | reward-free trajectories | 固定数据的 LeWM planning 对照 |
+| Temporal-Distance JEPA | directed temporal cost、cross-trajectory negatives、rollout consistency | reward-free trajectories | 固定 planner 与 cost-form 分离比较 |
+| Fast-LeWM | action-prefix multi-horizon prediction | reward-free trajectories | rollout error、规划速度和 success |
+| PhyLatent | physical grounding、counterfactual separation、denoising | 使用物理状态 grounding | physical-representation 上限；不能冒充无监督公平对照 |
+| PSG-JEPA | proprioception、joint-angle change grounding | 使用本体状态监督 | probe、policy 和真机专项 |
+
+截至 2026-08-12，PhyLatent 作者报告 OGBench-Cube MPC success `70.0% -> 78.1%`、
+TwoRooms `81.0% -> 98.0%`；Temporal-Distance JEPA 作者报告在锁定评测下 Two-Room
+达到 100%，并在共享欧氏规划下使 OGB-Cube 相对 LeWM 提升 14.2 个百分点。这些数字的
+baseline checkpoint、训练数据和监督并不自动等同于 Stable World Model 表格口径，只有
+复现或逐项核对配置后才能进入正式结果表。
+
 ## 我们服务器上现有结果
 
 Gemini 服务器已有 TD-MPC2 CartPole 结果，并已启动单 seed 的 LeWM PushT 从头训练。
@@ -211,3 +244,9 @@ checkpoint 评测；从头训练 ViT world model 前需要另行测量显存和�
 - 官方 LeWM PushT 数据与 checkpoint：<https://huggingface.co/datasets/quentinll/lewm-pusht>
 - 第三方 PushT checkpoint 复现：<https://huggingface.co/MasonJK99/lewm-pusht>
 - Fast-LeWM 项目页：<https://fast-lewm.github.io/>
+- Value-Guided JEPA：<https://arxiv.org/abs/2601.00844>
+- Reward-free bisimulation JEPA：<https://arxiv.org/abs/2602.18639>
+- RC-Aux：<https://arxiv.org/abs/2605.07278>
+- Temporal-Distance JEPA：<https://arxiv.org/abs/2607.25337>
+- PhyLatent：<https://arxiv.org/abs/2608.05720>
+- PSG-JEPA：<https://arxiv.org/abs/2608.06799>
