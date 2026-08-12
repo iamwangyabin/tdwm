@@ -1,7 +1,7 @@
 # World Model 领域调研与 RL 辅助 LeWM 研究方案
 
 调研截止：2026-08-12<br>
-文档状态：领域调研和创新性审计完成，方法尚未确定，实验尚未开始<br>
+文档状态：领域检索完成，两批核心论文逐篇方法审计完成，方法尚未确定，实验尚未开始<br>
 项目平台：`stable-worldmodel[all]==0.1.1`
 
 ## 1. 执行摘要
@@ -51,9 +51,11 @@ occupancy，并引入跨时间尺度 consistency 用于组合规划；TD-Flow/UH
   video world model、WAM 和 evaluation 做前向近邻检索；
 - 覆盖 architecture、state/action/time representation、training signal、data regime、test-time
   use、failure mode 和 evaluation evidence，不把“列到论文名”当作已经完成比较；
-- 当前共收录 140 个 primary/official references。2026 年工作大量仍是 preprint，文中将其
+- 当前共收录 144 个 primary/official references。2026 年工作大量仍是 preprint，文中将其
   用于 novelty audit，不把作者报告的结果当作本项目已复现事实。截止日期后的新论文仍需
   在实验开始前再做一次公式级检索。
+- 第 14 节已按统一模板完成 64 篇核心论文的方法审计，其中 53 篇标为全文方法审计 `F`，
+  11 篇标为主体方法审计 `M`；其余 80 篇参考文献仍是待审语料库，不冒充全文已读。
 
 ## 2. 什么是 World Model
 
@@ -443,7 +445,7 @@ action adherence、多模态 calibration、coverage 和 closed-loop divergence�
 | VAML / TOM | 依实现 | 可 | 是 | value/occupancy | model-data decision objective | policy/MPC |
 | MVE / STEVE | online 或 replay | 可 | 短 rollout | terminal value | 按 horizon/uncertainty 组合 | policy/value learning |
 | FB / One-step FB | 是 | 可 | 否 | 是 | successor factorization | direct policy |
-| TD-JEPA | 是 | 是 | 否 | 是 | TD latent prediction | direct zero-shot policy |
+| TD-JEPA | 是 | 可 | 否 | 是 | TD latent prediction | direct zero-shot policy |
 | RLDP | 是 | 可 | representation stage | 后接 BFM | dynamics + anti-collapse | direct policy |
 | `gamma`-model / TD-Flow | 是或 off-policy | 主要 state | 否 | 是 | TD distribution recursion | value/planning |
 | UHM | offline | 主要 state | 否 | 任意 horizon | horizon-conditioned | offline value learning |
@@ -748,7 +750,1104 @@ cosine similarity。加入 physical probes、rank、OOD support 和多 seed。
 即便这个定位也只是待检验问题。它的价值取决于是否超越 2025-2026 年已经出现的长期
 world-model 与 plan-aware JEPA 工作。
 
-## 14. 参考文献
+## 14. 逐篇论文方法审计
+
+### 14.1 阅读口径、状态与当前范围
+
+本节不再把“出现在参考文献中”等同于“已经读过”。每篇论文使用以下状态：
+
+| 状态 | 判定标准 | 可用于什么结论 |
+| --- | --- | --- |
+| `F` | 核过全文主体、关键公式、训练与推理路径、主要实验和必要附录 | 可用于方法边界与强新颖性判断 |
+| `M` | 核过完整方法链和主要实验，但尚未逐项审计全部证明或附录 | 可用于方法比较，不单独承担优先权结论 |
+| `A` | 只核过摘要或官方介绍 | 只能列入候选，不用于排除创新 |
+| `Q` | 已进入语料库，尚待逐篇审计 | 不得写成已读结论 |
+
+“全文阅读”在这里不是逐字复述，而是必须回答七个可复核问题：输入数据是什么，是否使用
+reward；latent 与 action 如何表示；预测算子是什么；损失和 stop-gradient 的路径是什么；测试时
+模型用于 MPC、policy 还是 value；主要证据是什么；结论在哪些假设或评测范围外不成立。
+
+两批共完成 64 篇审计。第一批覆盖 35 篇与 LeWM、RL 辅助 world model、长期模型和
+world-action model 最直接相关的工作；第二批补齐 29 篇 model-based RL 基础方法、
+decision-aware model learning、behavioral representation 与 LeWM 最新直接后续。其中 53 篇为
+`F`，11 篇为 `M`。第 15 节其余 80 篇仍是待审语料库，不因被引用而自动变成 `F`。后续阅读
+继续按“扩展领域、评测与失效诊断”的顺序写回本节，不再创建分散的调研文件。
+
+### 14.2 第一批三十五篇论文的接口总表
+
+| 论文 | 状态 | 数据与 reward | 动作接口 | 预测对象与时域 | 防坍塌或任务信号 | 测试时用途 |
+| --- | --- | --- | --- | --- | --- | --- |
+| LeJEPA | `F` | 多视图自监督，无 reward | 无动作 | view 到全局 embedding | SIGReg | 表征预训练 |
+| DINO-WM | `F` | 离线轨迹，无 reward | primitive action | frozen DINO patch，一步并 AR | 冻结预训练 encoder | CEM/GD MPC |
+| PLDM | `F` | 离线轨迹，无 reward | primitive action | learned latent，多步 ensemble | var/cov、时序、IDM | MPPI MPC |
+| LeWM | `F` | 离线轨迹，无 reward | primitive action | learned latent，一步并 AR | SIGReg | CEM MPC |
+| Value-Guided JEPA | `F` | 离线轨迹，无外部 reward | primitive action | JEPA latent + goal value | IQL reaching cost | MPPI MPC |
+| Reward-free Bisim JEPA | `F` | 离线视觉轨迹，无 reward | primitive action | 低维 patch latent，一步并 AR | bisimulation + PCA-VCReg | CEM MPC |
+| Temporal Straightening | `F` | 离线轨迹，无 reward | primitive action | JEPA latent，一步并 AR | stop-grad + curvature | GD/CEM MPC |
+| RC-aux | `F` | 离线轨迹，无 reward | primitive action | 开放环多 horizon latent | SIGReg + reachability | CEM MPC |
+| Fast-LeWM | `F` | 离线轨迹，无 reward | action prefix | anchor 到多 horizon latent | SIGReg | 并行 CEM MPC |
+| AdaJEPA | `F` | 离线预训练 + 在线 transition | primitive action | 在线校准一步 predictor | stop-grad prediction | adapt-and-replan MPC |
+| Hi-LeWM | `F` | 离线轨迹，无 reward | latent macro-action | coarse waypoint latent | 冻结低层、数据支持约束 | 分层 CEM MPC |
+| Temporal-Distance-JEPA | `F` | 离线 demonstration，无 reward | primitive action | rollout + directed temporal cost | SIGReg + step-count labels | CEM/iCEM MPC |
+| TC-LeWM | `F` | 多任务离线轨迹，无 reward | primitive action | LeWM latent | centered-residual SIGReg | BC policy |
+| PhyLatent | `F` | 离线轨迹 + simulator state | primitive/counterfactual action | 多步 latent | 物理、反事实和去噪监督 | CEM MPC |
+| PSG-JEPA | `F` | 机器人轨迹 + proprioception | primitive action | 一步 latent + 多时距状态差 | state/change grounding | GC-IDM 与 policy |
+| Metric Non-Collapse | `M` | state-metric 监督，确定系统 | primitive action | deterministic latent transition | local-global metric hinge | latent MPC 理论迁移 |
+| SPR | `F` | 在线 Atari reward | primitive action | K 步 latent | EMA target + RL Q loss | model-free policy |
+| Self-Predictive RL | `F` | 在线 RL transition/reward | primitive action | 一步 latent | stop-grad/EMA + RL loss | model-free actor/value |
+| DreamerPro | `F` | 在线 RL reward | primitive action | RSSM state | balanced prototype + reward | imagination actor-critic |
+| MuDreamer | `F` | 在线 RL reward | primitive action | RSSM state | value/reward/action heads + BN | imagination actor-critic |
+| R2-Dreamer | `F` | 在线 RL reward | primitive action | RSSM state | Barlow Twins + reward/KL | imagination actor-critic |
+| RLDP | `F` | 离线 state 轨迹，无 reward | primitive action | H 步 latent | hypersphere + orthogonality | zero-shot policy |
+| TD-MPC2 | `F` | online/offline RL，含 reward | primitive action | implicit local latent | consistency + reward/Q | MPPI MPC + actor prior |
+| GCBC/GCSL | `F` | hindsight-relabeled trajectory | goal-conditioned policy | 不建 world model | supervised BC | direct policy |
+| GCIQL/IQL | `F` | offline goal reward | goal-conditioned policy | Q/V，不建 dynamics | TD + expectile + AWR | direct policy |
+| GCIVL/HIQL | `F` | offline goal reward | goal/subgoal policy | action-free V | value TD + expectile | flat/分层 policy |
+| HILP | `F` | offline unlabeled state data | latent direction | temporal metric | IVL + intrinsic reward | foundation policy |
+| `gamma`-model | `F` | reward-free state transition | policy-conditioned | discounted occupancy | 生成式 TD | value/GPI/rollout |
+| TD-Flow | `F` | reward-free state transition | policy-conditioned | successor distribution | TD flow matching | value/GPI |
+| TD-JEPA | `F` | 离线 transition，无 reward | policy-conditioned | discounted future feature | target/stop-grad + orthogonality | zero-shot policy |
+| UHM | `F` | offline RL，含 reward | policy-conditioned | 任意整数 horizon state | flow matching + TD target | critic/actor target |
+| Jumpy World Models | `F` | 离线 state 轨迹，无 reward | 预训练 policy 作为动作 | 多折扣 occupancy | TD-Flow + horizon consistency | policy-sequence planning |
+| DreamZero | `M` | 大规模机器人与视频，无 RL | 直接生成 action chunk | joint video/action chunk | flow matching + video prior | WAM policy |
+| LaWAM | `F` | robot/human video + 下游示范 | latent action 到 action chunk | chunk-level visual subgoal | frozen DINO + state auxiliary | VLA action expert |
+| JEPA Generalization Theory | `M` | 理论离散 transition | action-conditioned | spectral JEPA operator | spectral risk | planning error bound |
+
+这张表先排除了一个常见混淆：SPR、MuDreamer 和 R2-Dreamer 中的 RL 梯度确实帮助了表示，
+但它们的 transition head 并不是部署时供 MPC 查询的 zero-shot simulator；TD-JEPA、RLDP 和
+Jumpy 确实是 reward-free zero-shot control，但其预测接口是 policy-conditioned future，而不是
+LeWM 的任意 primitive action sequence。
+
+### 14.3 LeWM 主干与直接前身
+
+#### LeJEPA / SIGReg（`F`）
+
+**问题与模型。** LeJEPA 是通用多视图自监督方法，不是 action-conditioned world model。
+encoder 预测同一样本其他 view 的均值或全局 embedding，并直接正则表示分布。
+
+**目标与梯度。** SIGReg 对 batch 中 latent 的随机一维投影计算 Epps-Pulley 正态性统计，使
+投影接近标准高斯。随机方向反复采样，从而近似约束各方向的 isotropy。方法不依赖 teacher、
+EMA、stop-gradient、negative pair 或 prototype。
+
+**它解决和没有解决的事。** 它为 LeWM 提供了无需不对称 target network 的全局非坍塌机制，
+也给出特定 probe family 下 isotropic Gaussian 与下游风险的联系。但全局分布正常不意味着
+action 可辨识、latent Markov、反事实分支分离或物理状态充分。LeWM 把 view prediction 换成
+时序 action-conditioned prediction，并不能继承这些更强性质。
+
+#### DINO-WM（`F`）
+
+**输入与模型。** 输入是 reward-free 图像动作轨迹。DINOv2 encoder 全程冻结，保留 patch
+tokens；decoder-only ViT 接收 latent history 和 action embedding，以 causal attention 预测整张
+future patch grid。
+
+**目标与梯度。** 训练采用 teacher-forced multi-step latent MSE，梯度只更新 action encoder 和
+predictor，不进入 DINOv2。可选 pixel decoder 独立从 feature 重建图像；论文发现让重建梯度进入
+transition predictor 反而变差。
+
+**推理与证据。** 测试时对候选 primitive action sequence 做 latent rollout，以 terminal DINO
+distance 为 cost，用 CEM 或 gradient planning，实验中 CEM 更稳。它避免 end-to-end collapse
+依靠的是外部预训练和冻结，不是学到了最小控制状态。约 19M 的 predictor 之外，规划时仍要运行
+较大的 DINO encoder，计算口径不能只报 trainable 参数。
+
+#### PLDM（`F`）
+
+**输入与模型。** PLDM 从 reward-free offline trajectory 端到端训练 encoder，并用多个
+autoregressive predictor 组成 ensemble。不同环境使用不同 encoder 和 latent 结构：Two-Room
+使用 GRU/Impala 风格像素模型，Diverse PointMaze 显式拆出 spatial latent 与 velocity plane，
+Ant 使用 state MLP。因此它不是一个统一像素架构在所有任务上的结果。
+
+**精确目标。** 总目标包含五类而不是“七项”：multi-step similarity、variance、covariance、
+temporal similarity/smoothness、inverse dynamics。variance/covariance 消融会造成灾难性坍塌；
+temporal 项影响较温和；IDM 的帮助依赖环境。VCReg、时序约束和 IDM 共同塑造 latent，不能把
+结果归因于多步预测一项。
+
+**推理与边界。** MPPI 在 ensemble dynamics 中 rollout，cost 由 goal distance 与 ensemble
+uncertainty penalty 组成，并反复 replanning。它已覆盖“reward-free、多步预测、IDM、控制导向
+latent”组合，但没有 policy-conditioned successor operator，也不处理 LeWM 的 SIGReg 几何。
+
+#### LeWorldModel（`F`）
+
+**数据与架构。** LeWM 使用无 reward 的 `(o_{1:T},a_{1:T})` 轨迹。ViT-Tiny 约 5M 参数，
+patch 14、12 层、hidden 192，以 `[CLS]` 为 state；projector 是带 BatchNorm 的单层 MLP。
+predictor 是约 10M 的 causal Transformer，6 层、16 heads，动作通过每层 zero-init AdaLN 注入，
+并使用长度为 `N` 的 history。
+
+**精确目标。** teacher-forced 一步目标为
+
+```math
+\mathcal L_{\mathrm{pred}}
+=\|\hat z_{t+1}-z_{t+1}\|_2^2,
+\qquad
+\mathcal L=\mathcal L_{\mathrm{pred}}+\lambda\mathcal L_{\mathrm{SIGReg}},
+```
+
+其中 encoder 与 predictor 均接收梯度，没有 EMA 或 stop-gradient；SIGReg 使用 1024 个随机
+单位投影，默认权重约 0.1。论文还指出 encoder 最后的 LayerNorm 会与 isotropic Gaussian 目标
+冲突。
+
+**推理。** 从当前 latent 开始把 predictor 输出反复喂回自身，形成 autoregressive rollout；
+terminal Euclidean distance 到 goal latent 是 cost，CEM 优化动作，执行前 `K` 个动作后重规划。
+
+**证据与限制。** 约 15M transition、单 GPU 的训练显示 compact end-to-end JEPA 可稳定工作。
+probe 和 surprise correlation 表明物理变量可读，但不是 causal sufficiency 证明。Two-Room 失败
+被作者联系到真实低维流形与 isotropic Gaussian 不匹配。一步 teacher forcing 与开放环部署存在
+exposure gap；deterministic point prediction 无法表达多模态未来；latent Euclidean cost 也未被
+训练成 reachability 或 value。
+
+### 14.4 直接修改 LeWM 表征、rollout 或 planner 的工作
+
+#### Value-Guided Action Planning with JEPA（`F`）
+
+**方法。** 该工作定义 `V(s,g)=-||E(s)-E(g)||`，对无 reward trajectory 自行构造 reaching
+cost `-1[s!=g]`，用 expectile IQL TD loss 学 goal-conditioned value geometry；quasimetric 版本允许
+方向不对称。随后仍用 JEPA predictor 与 MPPI MPC。
+
+**关键结果。** Wall 和 Maze 上 value/quasimetric 训练优于普通 contrastive、VCReg 或 EMA JEPA；
+但把 prediction loss 与 value loss共同训练反而低于单独 value 表征。作者明确承认远距离 pair
+稀疏、discount 使远处梯度变弱、随机系统下 IQL 有偏。它已覆盖“用 RL value loss 改 LeWM
+planning geometry”，所以这个宽泛方案不再新颖。
+
+#### Reward-Free Bisimulation JEPA（`F`）
+
+**方法。** 冻结 DINOv2/SimDINOv2/iBOT，在每个 patch 上加 residual MLP，把 384 维压到 32 维；
+同时学 causal ViT transition。pairwise latent distance 拟合无 reward、on-policy 的一步 predicted
+transition distance，并加入 PCA-based VCReg：先短暂使用普通 VICReg，再识别 pretrained feature
+的主成分，只对 tail directions 保持 variance floor，使 background-dominated leading components
+可以收缩。
+
+**推理与边界。** CEM 用 terminal latent distance 做 image-goal MPC。PointMaze 的 test-time
+background/distractor shift 上优于 DINO-WM，但主要证据只有简单导航、50 个 episode，且所谓
+control relevance 来自行为分布上的 transition equivalence，不是全动作 bisimulation。它覆盖
+reward-free dynamics-aware invariance，却不提供 policy-conditioned 长期算子。
+
+#### Temporal Straightening（`F`）
+
+**方法。** 在 JEPA prediction 上加入连续 latent velocity 的曲率损失：
+
+```math
+v_t=z_{t+1}-z_t,
+\qquad
+\mathcal L_{\mathrm{curv}}
+=1-\frac{v_t^\top v_{t+1}}{\|v_t\|\|v_{t+1}\|},
+\qquad
+\mathcal L=\mathcal L_{\mathrm{pred}}+\lambda\mathcal L_{\mathrm{curv}}.
+```
+
+prediction target stop-gradient；encoder、action encoder 和 predictor 联合更新。线性分析把
+`A` 接近 identity 与有限时域 controllability Gramian 及 planning Hessian condition number 联系
+起来，但非线性结论仍需控制 state-dependent Jacobian products。
+
+**证据与边界。** Wall、UMaze、Medium Maze、PushT 上同时改善 GD 与 CEM，三 seed；长时仍有
+明显 rollout drift。它已覆盖“让 LeWM latent 更适合优化”的几何正则，但 straightness 不保证
+action branch 可辨识、全局不折叠或长期 occupancy 正确。
+
+#### RC-aux（`F`）
+
+**方法。** RC-aux 不换 LeWM backbone，而把一步 teacher forcing 换成开放环 multi-horizon loss：
+
+```math
+\mathcal L_{\mathrm{mh}}
+=\sum_{k=1}^{K}w_k\|\hat z_{t+k}-z_{t+k}\|_2^2.
+```
+
+另学有方向且带预算的 `R(z,z',h)`。同轨迹 offset `Delta` 生成正例与 temporal hard negative，
+跨轨迹 pair 和 stop-gradient predicted rollout pair 补充 BCE supervision。总损失为 multi-horizon
+prediction、原 SIGReg 和 reachability BCE。
+
+**推理与边界。** planner 可只用改进后的 model，也可让 reachability 对 terminal goal cost 做
+soft feasibility gate。Wall 上训练目标本身把成功率从 50.4% 提到 72.4%，planner gate 再到
+83.6%；额外参数约 3.74%。但负例只表示“在观察到的 trajectory 中未于预算内到达”，不是 MDP
+全局不可达证明。它已直接覆盖“多 horizon + reachability 来帮助 LeWM”。
+
+#### Fast-LeWM（`F`）
+
+**方法。** 它不做 autoregressive state rollout，而让 causal action Transformer 把每个 prefix
+`a_{t:t+k-1}` 编成 token `p_{t,k}`，再从同一 observed anchor `z_t` 并行预测所有 `z_{t+k}`：
+
+```math
+\hat z_{t+k}=G(z_t,p_{t,k}),
+\qquad
+\mathcal L_{\mathrm{prefix}}
+=\frac1H\sum_{k=1}^{H}\|\hat z_{t+k}-z_{t+k}\|_2^2.
+```
+
+保留 SIGReg。规划可额外惩罚“直接预测终点”和“经中间 prefix 分解预测终点”的差异。
+
+**证据与边界。** 在 LeWM 四任务同协议上平均 85.8% 到 90.5%，加 self-consistency 到 92.0%；
+dynamics module 约 3.9 倍加速，完整 CEM 时间约减 48%。这已经覆盖 arbitrary-action prefix 的
+多时域直接预测与 decomposition consistency。任何新方法若只做“长期头预测多步 latent”，会
+与它高度重叠。
+
+#### AdaJEPA（`F`）
+
+**方法。** 每个 MPC 周期执行首个 action chunk，把新 transition 放入 recent-N 或 hard-N buffer，
+用与预训练相同的一步 latent prediction loss更新少量 encoder/predictor layers，然后重新规划。
+默认 target stop-gradient，一次 gradient step，episode 结束后恢复同一 pretrained checkpoint。
+
+**证据与边界。** PushT/PushObj 的 shape 与 visual shift、PointMaze 的 mass/damping/layout shift
+均有改善，三 data seeds、每 seed 50 episodes；红色物体与 anchor 混淆时收益有限。它是
+self-supervised online system identification，不是 RL reward，也不学习 policy-conditioned long
+horizon operator。“执行后校准再 replanning”已经不是空白。
+
+#### Hi-LeWM（`F`）
+
+**方法。** 冻结 LeWM encoder 与 low-level predictor。Transformer 把长度不定的 primitive action
+chunk 编成 macro-action `ell`，高层 predictor 学 `p_hi(z_t,ell)->z_{t+k}`；高层 CEM 搜 latent
+macro-actions 得 subgoal，低层 LeWM CEM 追 subgoal。
+
+**失败诊断。** 无约束高层 CEM 会产生训练分布外 macro-action 和不可控 subgoal。方法最终用
+训练轨迹编码出的 empirical macro bank 作为 anchor，只搜索局部 residual；staged execution 在
+中等 horizon 有效，最长 horizon 又因不能在线纠错而下降。PushT 中距离比 flat LeWM 高 11.3
+点，最长距离高 14.7 点，三 seed。
+
+**边界。** 这篇论文的价值不只是 hierarchy baseline，而是说明局部与抽象模型的主要矛盾可能
+在 action/support compatibility，不一定在 representation collapse。任何双层 LeWM 必须把
+operator consistency 和 planner support 分开测。
+
+#### Temporal-Distance-JEPA（`F`）
+
+**方法。** 保留 LeWM 与 SIGReg，增加 metric-residual network：对称 feature distance 加最大
+ReLU asymmetric residual，得到 directed `d_psi(z_s,z_g)`。同轨迹 pair 回归 `j-i`，跨轨迹
+goal 用 margin hinge；另加入与 planner horizon 一致的五步 rollout loss。完整目标为一步
+prediction、rollout、temporal-distance 和 SIGReg。
+
+**推理与证据。** topology task 直接用 `d_psi` 给 CEM/iCEM 排序；contact-rich manipulation
+反而继续用同一 checkpoint 的 latent L2。锁定协议下相对 LeWM 与 RC-aux 有收益；但 PushT 上
+纯 temporal cost 为 69.0%，latent L2 为 86.0%。trajectory length 只是 observed-path upper
+bound，不是 shortest path。它已经覆盖 reward-free temporal progress mining、directed cost 与
+train-plan rollout alignment。
+
+#### Temporally Centered SIGReg / TC-LeWM（`F`）
+
+**方法。** 论文发现 full marginal SIGReg 会压缩多任务 mixture component centers，即便全局分布
+没有坍塌也会造成 task/state aliasing。TC-LeWM 计算局部时间窗均值和 residual：
+
+```math
+\bar z_t=|W_t|^{-1}\sum_{s\in W_t}z_s,
+\qquad r_t=z_t-\bar z_t,
+```
+
+只对 `r_t` 做 SIGReg，prediction 不变。若时间窗内 latent 全常数，则 residual 为零点质量，
+仍会受到 Epps-Pulley penalty。
+
+**证据与边界。** LIBERO 四 suite 的 10-task 均值 53.2% 到 73.6%，统一 40-task 为 44.4% 到
+73.5%，下游是冻结 encoder 后的 task-conditioned flow-matching BC policy。它直接推翻“只要
+isotropic non-collapse 就适合多任务”的假设，但不证明 residual Gaussianization 是所有任务的
+最优几何。
+
+#### PhyLatent（`F`）
+
+**方法。** 在 LeWM/SIGReg 外加入五类训练期约束：同一物理状态的颜色亮度增强 invariance；
+encoded/predicted latent 到 simulator physical state 的 grounding；predicted 与 target future 的
+projection/action-query alignment；batch-permuted noisy counterfactual actions 的 branch margin；
+以及以 predicted future 为条件的 latent denoising。所有辅助头部署时丢弃。
+
+**关键区分。** 它定义三种非全局坍塌：appearance 变化超过真实状态变化，物理远状态在 latent
+局部碰撞，不同 action 的真实 future 分离但 predicted branches 被压缩。这比简单 variance 指标
+更接近本项目原先说的“物理有意义”。
+
+**证据与边界。** Cube 上三类 failure 分别从 15.60/6.71/8.41% 降至 7.53/0.95/4.62%，MPC
+70.0% 到 78.1%；TwoRooms 提升明显，但 PushT 反而从 77.67% 降至 75.33%，三 seed。它依赖
+simulator-derived physical state 和人工 augmentation，不能作为纯 reward-free self-supervision，
+却是“物理 grounding”必须比较的监督上限。
+
+#### PSG-JEPA（`F`）
+
+**方法。** 保留 LeWM teacher-forced prediction 与 SIGReg。训练期 state head 从单 latent 回归
+joint、gripper、end-effector pose；transition head 从所有 horizon endpoint pair `(z_t,z_{t+k})`
+回归固定维度的 joint-angle change，而不是回归多解且随 horizon 变长的 action sequence。两头
+仅用于训练。
+
+**证据与边界。** 相同 backbone 下，Cube 的五 epoch GC-IDM success 为 95.0%，LeWM 为
+80.7%；30-step open-loop latent MSE 降低；LIBERO-Goal policy 为 85.3% 对 77.7%；三项真机任务
+平均 79.3% 对 60.0%。它证明 privileged proprioception 能显著帮助 LeWM，但这不是 RL 帮助，
+也不能支持“仅由视觉和动作自动发现全部物理变量”。
+
+#### Metric Non-Collapse（`M`）
+
+**方法。** 对 deterministic observable control system，除 prediction residual 外引入两项 state
+metric hinge。local 项要求 encoder Jacobian 沿单位 tangent direction 的长度至少为 `kappa`；
+global 项要求物理距离超过 `rho` 的 state pair 在 latent 中至少相隔 `alpha`。这分别阻止微分层面
+坍塌和全局 folding。
+
+**理论链。** 在 regular observable factor、Ahlfors coverage、统一 `C^{1,1}` budget、有限容量
+spline approximation 等假设下，经验目标的近似 minimizer 可推出 pointwise co-Lipschitz、统一
+controlled semiconjugacy，再推出 deterministic finite-horizon cost 与 optimizer transfer bound。
+
+**边界。** 监督需要 observable state distance 和 tangent direction，不是纯 pixels-only；实验是
+受控 pendulum/spline 或 bounded MLP，不能直接外推到 ViT LeWM。该文已经建立“global variance
+不能排除 folding”的精确反例，所以新工作不能只用 covariance/effective-rank 声称 metric fidelity。
+
+### 14.5 RL 梯度帮助 representation 或 decoder-free world model
+
+#### SPR（`F`）
+
+**方法。** SPR 是 Rainbow 上的在线 Atari 辅助任务。online encoder 经 action-conditioned conv
+transition 连续预测 `K=5` 个 future latent；future frame 由 EMA target encoder 独立编码，online
+projector/predictor 与 target projection 做归一化 cosine loss。总损失为 Rainbow Q loss 加 SPR，
+两者都更新 online encoder。
+
+**边界。** transition model 不用于 planning，论文明确把 model-based planning 留作未来工作。
+无 target/stop-grad 时性能下降，作者推测并行 RL gradient 也能抑制 collapse，但没有证明 RL
+单独足够。它是“RL objective 帮 self-predictive representation”的直接先例，不是 reward-free
+zero-shot world model。
+
+#### Self-Predictive Representations for RL（`F`）
+
+**理论对象。** 论文区分 observation-predictive abstraction、self-predictive abstraction、
+`Q*` abstraction 与 policy abstraction。严格 self-predictive state 需要 reward prediction 与 latent
+transition distribution prediction；只做 transition prediction 存在 constant solution。
+
+**实践算法。** 在 DDPG/R2D2 类 model-free RL 上加
+`||g(f(h),a)-f_target(h')||^2`，target 可 online、detach 或 EMA；不学习 reward model，不用 rollout
+planning。确定系统中 L2 对理想 expected-latent prediction 合理；随机系统有 double-sampling 和
+bias 问题。线性分析支持 stop-gradient/EMA 保持 feature covariance，但不是一般非线性联合收敛
+保证。
+
+**与本项目的关系。** `ZP + Q*` 在假设下可导出 reward representation，说明 RL value 与
+self-prediction 互补；实验只覆盖 state MuJoCo、distractor 和 symbolic MiniGrid，论文明确不含
+pixels。它不能证明给 LeWM 加 actor-critic loss会产生可用于任意 action MPC 的世界模型。
+
+#### DreamerPro（`F`）
+
+**方法。** 保留 DreamerV2 RSSM、reward 和 imagination actor-critic，删除 observation decoder。
+两条 temporally consistent augmentation sequence 的 observation features 与 RSSM states 都映射到
+`K` 个 prototype；momentum encoder 产生 target assignment，Sinkhorn-Knopp 使 batch assignment
+平衡，SwAV cross-view 与 temporal prediction 共同替代 reconstruction。
+
+**边界。** anti-collapse 来自 EMA 和 balanced prototypes，reward loss在 distraction 设置还被高权重
+使用。六个 DMC task、三 seed 显示 distraction robustness，但不构成“RL 本身防坍塌”的证据，
+也没有 reward-free transfer 或 MPC simulator 评测。
+
+#### MuDreamer（`F`）
+
+**方法。** DreamerV3 RSSM 不再让 reconstruction gradient塑造 state。world-model heads 预测
+reward、continuation、value 和 previous action；inverse dynamics 从当前 observation feature 与
+前一 state 预测 action。总 world loss包含这些 prediction、dynamics KL 与 representation KL，
+BatchNorm 对防坍塌关键；actor-critic 仍在 imagination 中训练。
+
+**意义。** 这是“task/value/action heads 取代 pixels decoder”的强先例，并直接把 value target
+用于 world representation。但它依赖当前任务 reward 和在线数据，不能在新 reward 上 zero-shot，
+其 state 也不是 LeWM 式 image-goal MPC metric。
+
+#### R2-Dreamer（`F`）
+
+**方法。** 在 DreamerV3 RSSM 中删除 decoder，用线性 projector 把 state 映到 `k`，与 detach 的
+image embedding `e` 做 Barlow Twins cross-correlation：对角逼近 1，非对角逼近 0。reward、
+continue 和 KL 仍保留，actor/critic 与 DreamerV3 相同。
+
+**证据与边界。** DMC、MetaWorld 和 DMC-Subtle 上五 seed，并报告约 1.59 倍训练加速。它证明
+redundancy-reduction 可以与 imagination RL 共存，不证明 actor/critic gradient 是非坍塌来源；
+更不是 reward-free LeWM。
+
+#### RLDP（`F`）
+
+**阶段一。** 在 reward-free state trajectory 上 unroll latent dynamics `H` 步，对 slow target
+encoder 做 MSE。作者发现 target network 仍会缓慢坍塌，于是把 latent 和 prediction 归一到半径
+`sqrt(d)` 的 hypersphere，并对随机 state pairs 加 orthogonality loss。
+
+**阶段二。** 冻结 representation，训练 Forward-Backward/contrastive successor-measure model 与
+task-conditioned policy；测试时用少量 reward labels 线性回归 task vector，直接执行对应 policy。
+
+**边界。** ExoRL、SMPL humanoid、D4RL 都是 state observation，没有 pixel encoder、image-goal
+MPC 或任意 action-sequence query。但它几乎正面覆盖“regularized latent dynamics 防坍塌，然后
+服务 reward-free zero-shot RL”，必须是首要 baseline，而不是只在 related work 一笔带过。
+
+### 14.6 Stable World Model 中的 decision baselines
+
+#### TD-MPC2（`F`）
+
+**模型。** TD-MPC2 是 online model-based RL，不是 reward-free预训练。encoder `h`、latent
+dynamics `d`、reward head `R`、五个 Q heads 和 stochastic policy prior `p` 共同组成 implicit
+decoder-free world model；multi-task 版本还给所有模块输入 task embedding。SimNorm 把 latent
+分组投到 simplex，是数值稳定手段，不是物理可辨识保证。
+
+**梯度路径。** 对 replay sequence unroll，world-model loss 包含 predicted latent 对 stop-gradient
+next observation latent 的 consistency、two-hot reward cross-entropy 和 EMA Q target 的 value
+cross-entropy。actor 在 imagined latent 上最大化 Q 加 entropy，但论文明确 actor objective 只更新
+`p`，不通过 actor loss 更新 encoder/dynamics。因此“TD-MPC2 用 actor gradient 塑造 world model”
+是不准确的；world model 得到的是 consistency、reward 和 Q supervision。
+
+**推理与边界。** MPPI 对 latent rollout 的累计 reward 加 terminal Q 排序，actor 提供部分候选和
+warm start。原论文覆盖 104 个 online continuous-control task、三 seed，并扩展到 317M/80-task
+agent。Stable World Model 的统一接口还加入 Q-ensemble uncertainty terminal penalty。它是有
+reward、task-specific decision model 的强上限，不是 LeWM 的 zero-shot reward-free公平替代；
+比较时必须同时报告 reward labels、online interaction 和 planner compute。
+
+#### GCBC / GCSL（`F`）
+
+**BC 的含义。** BC 是 Behavioral Cloning，即把 observation 到 action 当监督学习。GCBC 再把
+goal 加入条件，最常见目标是 `||pi(o_t,g)-a_t||^2`。hindsight relabeling 把轨迹后来实际到达的
+state 当 goal，于是任何 trajectory segment 都成为“朝该 future goal 的示范”。
+
+**论文与平台实现的区别。** 原 GCSL 论文迭代执行当前 policy、把到达的 goal relabel 后重新做
+supervised imitation，并在 deterministic/full-support 等假设下给出 goal-reaching lower bound。
+Stable World Model 中的 GCBC 是固定离线数据上的 policy baseline，使用 DINOv2 observation/goal
+features，不迭代建模环境，也不学习 value。它衡量数据中的直接模仿有多强，完全不能说明
+world-model fidelity。
+
+#### GCIQL / IQL（`F`）
+
+**方法。** IQL 只在 dataset actions 上训练 Q，避免训练阶段查询 OOD action。`V(s,g)` 对
+`Q(s,a,g)` 做 upper expectile regression；Q 回归 `r(s,g)+gamma V_target(s',g)`；最后用
+advantage-weighted regression 克隆高优势 action。goal-conditioned 实现通过 future/random goal
+relabeling构造 sparse reaching reward。
+
+**边界。** IQL 在 D4RL 尤其 AntMaze 展示 trajectory stitching，但它是 model-free offline RL，
+没有 action-conditioned transition predictor。Stable World Model 版本使用 DINO feature，再训练
+goal Q/V 与 policy。它是“给定同一数据，TD stitching 能否胜过 latent MPC”的 decision baseline，
+不能作为世界模型更准确的证据。
+
+#### GCIVL / HIQL（`F`）
+
+**GCIVL。** action-free value `V(s,g)` 直接对
+`r(s,g)+gamma V_target(s',g)` 做 expectile regression，不学 Q；policy extraction 仍用一步
+advantage `r+gamma V(s',g)-V(s,g)` 做 AWR。去掉 Q 减少 OOD action query，也意味着 value 只
+描述行为数据诱导的 state transition。
+
+**HIQL。** 同一 action-free value 同时训练 high-level subgoal policy 与 low-level action policy，
+把长目标拆成较近 waypoint。论文的价值在于 value 对远目标有噪声时，局部层次分解更稳，并能
+利用 action-free data。Stable World Model 的 flat GCIVL 不等同完整 HIQL hierarchy，实验报告
+时不能混称。
+
+#### HILP（`F`）
+
+**阶段一。** 用 goal-conditioned IVL 学 Hilbert representation，使
+`V(s,g)=-||phi(s)-phi(g)||` 近似 temporal distance。作者明确承认 discount、非对称 dynamics 与
+Hilbert symmetric metric 会带来 approximation error。
+
+**阶段二。** 定义方向任务的 intrinsic reward
+`<phi(s')-phi(s),z>`，对单位方向 `z` 用 offline RL 训练 latent-conditioned foundation policy。
+新 reward 或 goal 可通过少量 prompt/线性方向选择快速适配。
+
+**与 LeWM 的边界。** HILP 直接覆盖 reward-free temporal geometry 与 long-horizon policy family，
+但不提供 primitive arbitrary-action dynamics 或视觉 MPC。它与 TD-JEPA/RLDP 同属 direct policy
+路线，是检验“长期 operator 是否真的比普通 temporal metric 多信息”的必要 baseline。
+
+### 14.7 TD、successor 与长期 world model
+
+#### `gamma`-Models（`F`）
+
+**对象与 Bellman 结构。** 对固定 policy 学 normalized discounted occupancy
+
+```math
+\mu^\pi(s\mid s_t,a_t)
+=(1-\gamma)\sum_{\Delta t\ge1}\gamma^{\Delta t-1}
+P(s_{t+\Delta t}=s\mid s_t,a_t,\pi).
+```
+
+target distribution 是 `(1-gamma)` 的真实一步 successor 与 `gamma` 的下一状态 bootstrap
+`gamma`-model 混合。论文用 GAN/f-divergence 或 normalizing flow 做 off-policy generative TD，
+从而不显式标注 future timestamp 就学习长期分布。
+
+**用途与限制。** value 可由 successor sample 的 reward期望得到，也可做 generalized rollout 和
+gamma-MVE。模型是 policy-conditioned state distribution，不接收测试时任意 action sequence；
+单样本 stochastic density TD 存在 bias/bound，且早期生成模型稳定性有限。
+
+#### Temporal Difference Flows（`F`）
+
+**方法。** 用 flow matching 表示 policy-conditioned geometric-horizon successor measure。
+普通 TD-CFM 抽样 immediate 或 bootstrap terminal sample；coupled 版本复用 noise 降 variance；
+TD2-CFM 进一步对整条 probability path/vector field 写 Bellman equation，让 online vector field
+匹配一步 CFM velocity 或 target vector field。
+
+**证据与边界。** 理论给出 convergence 与较低 gradient variance；state benchmark 上改善生成
+metric、value 和 GPI，但 flow sampling需要多步积分。它没有视觉 encoder，也没有 primitive
+action counterfactual rollout。若新方法使用“TD 训练长期 latent distribution”，必须把它当直接
+算法前身。
+
+#### TD-JEPA（`F`）
+
+**方法。** 从 offline reward-free transition 学 state encoder `phi`、task encoder `psi`、policy
+family `pi_z` 和 predictor。Monte Carlo 版本预测 successor measure 采样的 discounted future；TD
+版本使用不对称 bootstrap：
+
+```math
+\|T_\phi(\phi(s),a,z)-\operatorname{sg}(\psi(s'))
+-\gamma\operatorname{sg}(T^-_\phi(\phi^-(s'),a',z))\|_2^2,
+\quad a'\sim\pi_z(s').
+```
+
+另有交换 encoder 角色的 symmetric path、EMA target 和 orthonormal regularizer；actor 最大化
+predicted feature 与 task vector `z` 的内积。
+
+**测试与边界。** 新 reward 由少量 labelled state 线性拟合成 `z`，直接用 `pi_z`，不是 MPC。
+13 dataset、65 task 支持广泛 transfer，但理论依赖理想 tabular/linear、uniform coverage 与
+orthonormal 等假设。它是“RL/TD 帮助长期 self-supervised WM”的最近工作，却没有 LeWM 的
+policy-independent primitive action local simulator。
+
+#### Universal Horizon Models（`F`）
+
+**方法。** 对 policy `pi` 学任意整数 `n` 的 `P(s_n|s_0=s,a_0=a,pi)`。`n+1` target 由真实一步
+`s'` 加 target UHM 的 `n`-step sample bootstrap，flow matching 拟合 conditional distribution；
+EMA target、lambda horizon schedule、winsorized geometric horizon 和 behavior-policy mixing 改善
+稳定性。
+
+**用途与边界。** UHM sample 被用于 model-based generalized TD target，reward model、critic 和
+TD3+BC actor 仍需 reward。OGBench 100 task 平均优于强 baseline，但 high-dimensional humanoid
+maze 失败；作者把 visual observation 与 action chunks 列为未来工作。它是任意 horizon 强 null，
+不是 LeWM encoder 的防坍塌方法。
+
+#### Jumpy World Models（`F`）
+
+**方法。** 从相同 reward-free offline state 数据先训练一族 goal/foundation policies，再用
+TD-Flow 学 policy 和 discount-conditioned geometric-horizon models。horizon consistency 推导
+不同 discount successor measure 的 Bellman-like relation；规划时把 policy 视为 jumpy action，
+每个 policy 持续随机时长，组合 GHM sample 估计终点或 subgoal value。
+
+**证据与边界。** OGBench antmaze/cube、五类 base policy、三 seed，长 horizon 上显著优于直接
+primitive ActionPlan。consistency 明显改善 EMD，但在测试 horizon 上只带来约 5% planning 增益。
+论文明确把 learned visual latent 留为未来工作。它已经覆盖“跨时间尺度 consistency + 抽象动作
+规划”，因此候选创新必须比这一表述更具体。
+
+### 14.8 World Action Model 与 latent action
+
+#### DreamZero（`M`）
+
+**方法。** 14B WAM 从 Wan video diffusion 初始化，条件为视觉历史、语言和 proprioception，
+联合生成 future video latent 与 action chunk。因子化上等价于 video prediction 乘 inverse
+dynamics；训练用 flow matching 对当前 noisy video/action chunk 去噪，clean previous chunks 通过
+teacher forcing 提供上下文。推理时联合去噪，真实 observation 替换 cache 中预测 frame，并以
+异步闭环达到约 7Hz。
+
+**边界。** 约 500 小时 heterogeneous robot data 和 web-video prior，不使用 RL，也不是 zero-shot
+reward transfer。它的 physical prior 主要来自规模化视频预训练与 joint action generation。除非
+本项目转向直接 action policy，否则它是相邻 WAM，而不是 LeWM planner 的等价 baseline。
+
+#### LaWAM（`F`）
+
+**阶段一。** 冻结 distilled DINOv3 ViT-B/16。inverse encoder 从当前与 chunk-horizon visual
+features 推断 Gaussian latent action `z`；forward decoder `LaWM(u,z)` 回归 horizon feature。另用
+EEF state 与 `z` 预测 horizon state，KL 把 latent action regularize 到标准高斯。该 auxiliary head
+训练后丢弃。
+
+**阶段二。** policy prior 从当前 observation 与 language 蒸馏 posterior latent action；LaWM 单次
+forward 生成 visual subgoal；Alternate-DiT action expert 在 semantic stream 与 `(u,u_hat_T)`
+dynamics stream 间交替，用 conditional flow matching 生成 action chunk。Knowledge Insulation
+阻止 action-expert gradient 覆盖 pretrained LaWM；不同数据用固定 physical time 而不是固定 frame
+offset 对齐。
+
+**证据与边界。** 约 3000 小时 robot video 加 1500 小时 egocentric human video，LIBERO 98.6%、
+RoboTwin clean/random 92.64/89.80%、三项真机平均 90%，并显著低于 pixel WAM latency。它学习
+的是 task/language-conditioned latent-action prior 与 chunk subgoal policy，不是候选 primitive
+action 的 simulator，也不使用 reward-free MPC。若 TDWM 想引入 latent macro-action，它与
+Hi-LeWM、LaWAM 一起构成直接先例。
+
+### 14.9 两篇理论工作的可用结论
+
+#### A Generalization Theory for JEPA-Based World Models（`M`）
+
+该文把 action-conditioned spectral JEPA risk 写成 conditioned co-occurrence matrix 的低秩分解，
+再把 approximation error 表示为截断后的 singular-value tail，把 sample error 表示为 encoder 与
+predictor class 的 Rademacher complexity。确定 dynamics 假设下，multi-step planning error bound
+随 horizon `T` 线性放大。
+
+它提供“latent dimension 越大，approximation error 越小但 sample complexity 越差”的理论折中，
+但离散 spectral setting、bounded function class 和 deterministic transition 假设不能直接证明
+LeWM 的 SIGReg ViT generalization，也不涉及 policy-conditioned successor operator。
+
+#### Metric Non-Collapse 与 JEPA Generalization Theory 的区别
+
+前者从 state-metric hinge 推到 pointwise co-Lipschitz、uniform semiconjugacy 和 optimizer transfer，
+要求更强的 state metric、smoothness 与 coverage；后者从 spectral prediction risk 推到 average
+planning error，主要刻画 low-rank approximation 与 finite-sample trade-off。二者都表明不能从
+训练 MSE 或 global variance 直接跳到“物理世界模型”结论，但所需监督和保证强度完全不同。
+
+### 14.10 第二批二十九篇论文的接口总表
+
+第二批不是继续堆相似论文名，而是补上第一批比较中最容易被误读的三类因果链：经典
+model-based RL 到底怎样使用模型；value、policy gradient 或 occupancy 怎样改变 model
+objective；以及结构化 representation 到底保存了什么。前三项为 LeWM 的最新直接邻居。
+
+| 论文 | 状态 | 模型学习数据 | RL/任务信号进入何处 | 模型输出 | 测试时用途 |
+| --- | --- | --- | --- | --- | --- |
+| Causal-JEPA | `F` | 离线视频/动作，无 reward | 不进入；object masking | masked history + future object slots | VQA、CEM MPC |
+| HWM | `F` | 离线动作轨迹，无 reward | 不进入；宏动作来自 action encoder | 一步 latent + waypoint latent | 分层 MPPI/CEM MPC |
+| SD-JEPA | `F` | 离线动作轨迹，无 reward | 不进入；时间顺序塑造 progression 子空间 | content + progression latent | CEM MPC |
+| World Models | `F` | 随机策略视频，无 reward model | controller fitness 只训控制器 | VAE latent 的 MDN-RNN 分布 | dream/real controller |
+| PILCO | `F` | 少量在线 state transition | 期望长期 cost 反传到 policy | GP state-difference distribution | analytic policy search |
+| PETS | `F` | 在线 state transition | 已知 reward 只排序 rollout | ensemble probabilistic dynamics | CEM MPC |
+| MBPO | `F` | 在线 state transition | SAC 使用短模型 rollout | ensemble one-step transition/reward | synthetic replay |
+| Plan2Explore | `F` | 在线像素交互 | disagreement 是 intrinsic reward | RSSM + ensemble latent predictors | 探索，再适配任务 policy |
+| PlaNet | `M` | 在线像素与 reward | reward head 参与模型训练 | stochastic RSSM + reward | CEM latent planning |
+| Dreamer | `F` | 在线像素与 reward | actor/value 在 imagination 中训练 | RSSM + reward | latent actor-critic |
+| DreamerV2 | `F` | 在线像素与 reward | actor/value 不更新 world model | categorical RSSM + reward/discount | latent actor-critic |
+| DreamerV3 | `F` | 在线多模态与 reward | actor/value 不作为模型损失 | categorical RSSM + reward/continue | latent actor-critic |
+| Dreamer 4 | `F` | 大规模视频、动作、下游 reward | policy/value 在冻结模型 imagination 中训练 | diffusion-forced video dynamics | foundation WM + actor-critic |
+| SimPLe | `F` | 在线 Atari 图像与 reward | PPO 消费短 imagined rollout | stochastic pixel/reward model | synthetic environment |
+| IRIS | `F` | 在线 Atari 图像与 reward | actor/value 消费 token imagination | VQ tokens + reward/done | latent actor-critic |
+| MuZero | `M` | 在线 history 与 reward/search target | reward、value、search policy 共同塑模 | reward + value + policy latent model | MCTS |
+| TD-MPC | `M` | 在线 state/pixel 与 reward | reward、Q、policy 与 consistency 联训 | task-oriented local latent | MPC + terminal Q |
+| VAML | `F` | transition + value class | 直接最小化 value expectation error | decision-equivalent transition | 任意后续 planner |
+| IterVAML | `M` | 交替采样 transition | 当前 value 取代 worst-case class | 对迭代 value 准确的 transition | model-based value iteration |
+| PAML | `M` | policy visitation transition | 匹配真/模型 policy gradient | policy-gradient-aware model | policy optimization |
+| VaGraM | `F` | transition + 当前 value | value gradient 加权 transition error | 局部 value-aware transition | Dyna-style planning/RL |
+| TOM | `F` | 在线 replay + 当前 policy | 匹配真实/模型 transition occupancy | policy-relevant transition | model-based RL |
+| Value Equivalence | `F` | 理论或 task targets | Bellman operator 等价定义模型充分性 | value-equivalent model class | planning/control 理论 |
+| Calibrated VAML | `M` | stochastic transition/value | 修正不校准的 value-aware surrogate | calibrated value-aware model | value prediction/control |
+| DeepMDP | `M` | RL transition 与 reward | reward prediction 塑造 latent | latent reward + transition | model-free/value auxiliary |
+| DBC | `F` | 在线像素 RL | reward difference + policy transition | bisimulation latent dynamics | SAC representation |
+| MICo | `F` | on-policy RL transition | reward + policy-conditioned next-state metric | behavioral state distance | representation/value learning |
+| C-SWM | `F` | 无 reward object transition | 无 RL；contrastive negatives | object-factorized relational next latent | rollout/ranking probe |
+| Structured World Belief | `M` | 部分可观测视频与动作 | 后续 A2C/规划消费 belief | object-centric particle belief | POMDP control |
+
+这张表揭示一个必须在方案中写清的事实：“用 RL 帮助 world model”至少有五种不等价含义：
+RL 可以选择真实数据、给 model loss 加 decision weight、用 model 生成 replay、在冻结模型内训练
+actor/value，或让 policy-conditioned occupancy 本身成为预测对象。只有第二种会直接让 RL 梯度
+定义模型应保留什么；Dreamer 式 imagination 和 PETS 式 MPC 不能自动算作“RL 改善了表征”。
+
+### 14.11 LeWM 最新直接邻居
+
+#### Causal-JEPA: Learning World Models through Object-Level Latent Masking（`F`）
+
+**表示与输入。** 每帧先经冻结的 VideoSAUR 或 SAVi object-centric encoder 变成固定数量的
+slots；主要配置中的 VideoSAUR 又聚合冻结 DINOv2 features。动作和 proprioception 被编码为
+独立 auxiliary entity tokens，而不是混进视觉 slot。训练时选中若干对象，把它们在整个 history
+中的 slot 都换成 mask token，只保留最早时刻的 identity anchor；所有 future slots 一律被遮蔽。
+
+**预测器与损失。** 双向 ViT 同时补全 history 中被遮蔽的对象轨迹并预测 future object slots：
+
+```math
+\mathcal L_{mask}=\mathbb E\!\left[\sum_{\tau,i}
+\mathbf 1[\bar z_\tau^i\ne z_\tau^i]\|f(\bar Z)_\tau^i-z_\tau^i\|_2^2\right]
+=\mathcal L_{history}+\mathcal L_{future}.
+```
+
+测试时 history 完全可见，只把未来 token mask 掉，以 Hungarian matching 后的 object cost 做
+CEM。Push-T 中性能接近 DINO-WM，同时只用约 1% latent input features，规划快于其 8 倍；
+CLEVRER 的 counterfactual VQA 也显著改善。
+
+**严格边界。** 这里的“causal”是通过控制 predictor observability 迫使 interaction-dependent
+prediction 的 inductive bias，不是从 observation 识别 structural causal graph；论文明确不主张
+causal identifiability。它依赖 object encoder 的 slot 稳定性、identity anchor 与 finite history。
+因此它直接封住“加对象级 mask 就得到因果 LeWM”的宽泛创新，却没有解决 reward/TD 联训、
+长期 occupancy 或任意 behavior-policy 外动作的可识别性。
+
+#### Hierarchical Planning with Latent World Models / HWM（`F`）
+
+**两层算子。** 低层模型 `F_1(z_t,a_t)` 预测一步 latent；action encoder `A_psi` 把一段 primitive
+action chunk 压成 macro-action `l_t`；高层模型 `F_2(z_t,l_t)` 直接预测 chunk 末端 waypoint
+latent。两层共享同一 observation latent 空间，高层以真实 chunk 及真实 waypoint 做
+teacher-forced `L1` 预测，而不是通过 reward、skill discovery 或 policy gradient 学 abstraction。
+
+**规划。** 高层先用 MPPI/CEM 搜 macro-actions 到最终 goal，预测序列成为 latent subgoals；低层
+MPC 再搜索 primitive actions 到第一个 subgoal，执行短段后重规划。论文把同一 hierarchy 分别
+接到 V-JEPA2-AC、DINO-WM 和 PLDM，表明贡献主要是 planner/model interface，而不是某一个
+encoder loss。在论文的长时设置中，Franka pick-place 从 `0%` 到 `70%`，Push-T 从 `17%` 到
+`61%`，最大 maze 从 `63%` 到 `83%`，并报告最多约 3 倍 planning compute 降低。
+
+**严格边界。** macro-action decoder 没有保证任意 `l` 都对应数据支持内、低层可达的 primitive
+轨迹；高层预测准确也不等于每个 waypoint 可控。它已经覆盖“给 latent WM 加高低层模型来做
+长时规划”，但不是用 RL 改善 LeWM，也没有学习 policy-conditioned occupancy。
+
+#### Subspace-Decomposed JEPAs / SD-JEPA（`F`）
+
+**核心分解。** encoder 输出被固定地切成 `k` 维 progression subspace 与 `D-k` 维 content
+subspace，默认 `k=2`，实验另扫 `k∈{2,4,8}`。完整 latent 仍做 action-conditioned
+next-latent prediction；SIGReg 只作用于 content，
+progression 使用 temporal cosine-margin triplet，并在完整 latent 上加入 temporal straightening。
+progression 的前两维写成极坐标角度 `theta=atan2(z_2,z_1)`，全部 `k` 维给出半径 `r`；predictor
+也显式接收 `theta,r`，避免把时间推进全部塞进高维语义坐标。
+
+**规划 cost。** terminal goal cost 是 content MSE、角度 cosine distance 与半径差的加权和，仍由
+相同 CEM 优化；不是新 policy 或新 reward。固定、互斥坐标使两类 loss 对 latent coordinates
+的直接梯度正交，但它们到共享 encoder parameters 后仍会相加，不能排除 encoder-level conflict，
+更不证明两个子空间在统计上可识别为“内容”和“真实物理进度”。
+
+**证据与边界。** 在匹配参数量、10 epochs、3 seeds 下，报告在 Reacher、Two-Room、Push-T
+改善，在 Cube 略降，且最优 progression 权重依环境变化。它直接覆盖“给 LeWM 一个显式时间
+进度子空间”的提议；没有 RL、successor distribution 或长时 policy occupancy。
+
+### 14.12 经典 model-based RL 与 imagination 主线
+
+#### World Models（`F`）
+
+**方法链。** VAE 独立把 frame 压成 `z_t`；MDN-RNN 以 `(z_t,a_t,h_t)` 输出下一 latent 的
+Gaussian-mixture 参数及 recurrent state；极小线性 controller 以 `[z_t,h_t]` 产生动作，并用
+CMA-ES 的 episode return 优化。CarRacing 的 controller 在真实环境评估，VizDoom 还展示了在
+learned dream 中训练后迁移回真环境。
+
+**RL 到底帮了什么。** 初始 world model 用 random-policy observation 监督训练，不接收 controller
+gradient。return 优化的是 controller，而非 VAE/RNN representation；文中只是提出迭代收集更难
+轨迹来更新模型。MDN sampling temperature 用来缓和 controller 利用模型漏洞。
+
+**边界。** pixel reconstruction、随机数据覆盖和小任务使它与 LeWM 相距很远。它是“policy 在
+world model 中训练”的先例，不是“RL loss 防止 world-model collapse”的证据。
+
+#### PILCO（`F`）
+
+**模型与不确定性传播。** 对低维 state difference 学独立 Gaussian Processes：
+`x_{t+1}=x_t+f(x_t,u_t)+epsilon`。当前 state distribution 和确定 policy 共同形成不确定 GP 输入，
+再用 analytic moment matching 把每一步预测近似为 Gaussian，递推到整个 horizon。
+
+**policy update。** 目标是累积期望 cost `J(theta)=sum_t E[c(x_t)]`。由于 GP predictive moments、
+moment matching 和 policy 都可微，PILCO 用解析链式法则计算 `dJ/dtheta`，再由共轭梯度或
+L-BFGS 优化 policy；每次真实 trial 后把 transition 加回数据并重拟合 GP。
+
+**边界。** RL 的 cost 训练 policy，模型仍按 probabilistic transition likelihood 学；不确定性让
+少样本 planning 更稳，但 GP 复杂度、Gaussian propagation 和低维 state 假设限制了视觉扩展。
+
+#### PETS（`F`）
+
+**模型。** 多个 probabilistic neural networks 用 Gaussian NLL 预测 state delta 的均值和方差；
+bootstrap ensemble 表示 epistemic uncertainty，单网络的输出方差表示 aleatoric uncertainty。
+trajectory sampling 用 particles 在 ensemble 中传播，`TS1` 每步重采样模型，`TS∞`
+让同一 particle 整段固定在一个模型上，避免把模型分歧错误平均掉。
+
+**控制闭环。** CEM 迭代拟合高回报 action-sequence distribution，按已知 reward 在 particles 上
+估计候选回报，只执行第一步，再收集真实 transition 更新 ensemble。RL/return 没有反向塑造
+representation；它决定采哪些数据和如何查询模型。
+
+**边界。** 原实验是低维 state、短 MPC、已知 reward。PETS 支持“RL 主动改善模型覆盖”，但不
+支持“value loss 让视觉 latent 更物理”。
+
+#### MBPO（`F`）
+
+**方法。** 用真实 replay 拟合 probabilistic ensemble dynamics；从 replay 中真实 state 随机分叉，
+每个分叉只滚动 `k` 个 model steps，把 synthetic transitions 放入单独 model buffer，再用真实与
+模型数据共同训练 SAC。`k` 随训练日程增长，但核心结果是短 rollout，甚至一步 rollout，通常
+比长 rollout 更可靠。
+
+**关键结论。** prediction accuracy 不是 policy utility 的充分条件：论文观察到即使可做约 200 步
+准确 rollout，policy 用长 synthetic rollout 仍可能更差。MBPO 通过大量短分叉扩大数据，而不是
+要求单条 imagination 很长。
+
+**边界。** RL 主要消费模型样本；标准 maximum-likelihood model loss 不由 SAC value 加权。
+因此它是 LeWM 后接 policy learning 的 baseline 设计，不是 joint representation objective。
+
+#### Plan2Explore（`F`）
+
+**world model 与内在奖励。** 先用 Dreamer RSSM 学 observation/reward-free latent dynamics，另训
+一个 one-step latent ensemble。对同一 imagined next state 各 predictor 的输出方差作为
+disagreement，近似模型信息增益。
+
+**探索。** actor-critic 完全在 imagination 中最大化未来 disagreement，而不只是当前 novelty；
+执行探索 policy 收集真实数据后更新 RSSM。下游 task 到来时冻结已学的 task-agnostic model，
+用少量 reward labels 训练 reward predictor，再在 imagination 中训练 task policy。
+
+**边界。** 这是 RL 帮 world model 最清楚的一条路径：RL 改变真实数据分布，而不是直接反传到
+encoder。它需要 online interaction，不能原样用于固定 offline LeWM dataset。
+
+#### PlaNet（`M`）
+
+**方法链。** Recurrent State-Space Model 同时保留 deterministic recurrent state 与 stochastic
+state；observation encoder 给 posterior，transition prior 从上一 latent/action 预测，decoder 和
+reward head 用变分序列目标训练。latent overshooting 让多步 prior 与未来 posterior 对齐，降低
+只做一步 teacher forcing 的 drift。
+
+**推理。** 测试时不用显式 policy，而在 latent model 中用 CEM 搜 action sequence、累计预测
+reward，只执行第一步。模型同时有 observation 和 reward likelihood，故不是 reward-free JEPA。
+本轮已核主体方法与实验，尚未逐项复查全部附录超参数，因此保守标 `M`。
+
+#### Dreamer（`F`）
+
+**模型。** 以真实 replay 训练 RSSM 的 representation/posterior、transition/prior、observation 与
+reward heads；latent KL 约束 posterior 可被 dynamics 预测。随后从真实序列的 posterior states
+出发，在纯 latent imagination 中展开当前 actor。
+
+**RL update。** critic 拟合 imagined lambda-return；actor 最大化这些回报，并通过 reparameterized
+latent dynamics 与 reward/value predictions 反传 analytic gradients。相比 CEM，actor amortizes
+planning，部署时一次前向出动作。
+
+**边界。** actor/value 学习依赖模型，但 model objective 仍是 replay 上的变分预测目标；不能把
+“actor gradient 穿过模型求动作梯度”误写成“actor loss 更新了 world model”。
+
+#### DreamerV2（`F`）
+
+**相对 Dreamer 的改变。** stochastic latent 改为多组 categorical variables，并以
+straight-through estimator 训练；world-model loss 含 image、reward、discount likelihood 与 KL。
+KL balancing 对 prior 与 posterior 两侧使用不同 stop-gradient 权重，使 dynamics 追 posterior
+比 representation 追 prior 更快。
+
+**actor-critic。** actor 在 imagined trajectories 上结合 REINFORCE 与 straight-through dynamics
+gradient，critic 拟合 lambda-return。论文实现明确把 world model 与 behavior learning 分开：
+actor/value gradients 不更新 world-model parameters。
+
+**边界。** categorical latent 和 KL balancing 是稳定 RSSM 的技术，不提供 reward-free physical
+state 保证；Atari return 也不能证明 arbitrary-goal revaluation。
+
+#### DreamerV3（`F`）
+
+**稳健统一化。** 仍用 categorical RSSM，但把 dynamics KL 与 representation KL 用 stop-gradient
+拆开并加 free bits；对大幅度 reward/value 用 symlog 和 two-hot regression，按 return percentile
+范围归一化 advantage，并用 continuation head 处理 episode termination。这些设计使同一超参数
+覆盖 150 多个任务。
+
+**训练边界。** world model 在真实 replay 上最小化 reconstruction、reward、continue 与 KL；
+actor/critic 在 imagined lambda-returns 上更新。RL 决定数据和行为模块，但 actor loss不是一个
+LeWM anti-collapse regularizer。其表示是 task-aware RSSM，跨 reward 零样本规划不是主要接口。
+
+#### Dreamer 4（`F`）
+
+**foundation world model。** 先以大规模视频和动作预训练 causal video tokenizer 与 interactive
+dynamics transformer；用 shortcut forcing/diffusion-forcing 式 `x`-prediction 同时处理历史真实
+tokens 与 noisy future，使模型既能 teacher-forced 训练也能长时生成。下游再接 action、reward、
+continue 等 task heads。
+
+**policy learning。** actor/value 在视频模型生成的 imagination 中训练，默认冻结庞大的 transformer，
+并引入 behavioral prior 约束动作。Minecraft diamond 结果依赖约 2B 模型与约 2500 小时 VPT
+数据，回答的是 scalable video imagination 能否支撑 RL，而不是轻量 latent JEPA 是否防坍塌。
+
+**边界。** 它是重要规模上界和 foundation baseline；将其成功简单归因为“RL 训练了 world
+model”是错误的，主要 world-model pretraining 与下游 policy optimization 在梯度上分离。
+
+#### SimPLe（`F`）
+
+**模型和循环。** stochastic video model 从最近 frames 与 action 预测下一 RGB frame、reward 与
+done。训练使用 pixel loss、reward loss、scheduled sampling 等稳定化；agent 与真实 Atari 交互
+收集新数据，重训模型，再把模型当环境运行 PPO，循环多轮。
+
+**控制 model bias。** imagined episode 每约 50 步就从真实 replay frame 重新开始，并对截断处
+用 value bootstrap，避免 PPO 长时间利用错误模型。RL 不直接修正预测 loss，而是通过访问分布
+持续暴露模型缺口。
+
+**边界。** pixel generation 和 Atari task reward 与 LeWM 的 goal-latent MPC 不同；它证明的是
+小数据下 learned simulator 可供 policy training，不是 latent 满秩或物理可识别性。
+
+#### IRIS（`F`）
+
+**离散 world model。** VQ autoencoder 把每帧编码成一串离散 tokens；autoregressive GPT 按
+`frame tokens, action, next-frame tokens` 的序列预测下一帧 token，同时预测 reward 和 done。
+解码 token 可得到 imagined frame，但 policy 直接消费 latent/token history。
+
+**RL。** 按 DreamerV2 风格在模型生成的 trajectories 中训练 actor-critic，再到真实 Atari 收集
+数据并更新 tokenizer/GPT。相比 continuous RSSM，它把多模态视觉未来交给 categorical token
+language model，但每帧逐 token 自回归带来计算成本和 compounding error。
+
+**边界。** IRIS 是 reconstruction/generation-based、online、task-reward-aware，不是 fixed-data
+reward-free LeWM；它可作为“离散生成模型 + imagination RL”的架构对照。
+
+#### MuZero（`M`）
+
+**隐式模型接口。** representation `h` 把 observation history 变为 latent state；recurrent dynamics
+`g(s,a)` 输出下一 latent 与 immediate reward；prediction `f(s)` 输出 policy logits 与 value。
+MCTS 只在 latent 中调用 `g/f`，无需重建 observation。
+
+**训练。** 从 replay state 展开真实 action sequence，对每步预测 reward、bootstrapped/n-step
+value target 和 MCTS improved policy，representation、dynamics、prediction 联合更新。因此模型
+只需 value-equivalent，不需在像素或“物理变量”意义上准确。
+
+**边界。** 这是“RL targets 定义隐式 world model”的核心先例，也最能反驳“decision-useful 等于
+physical”。本轮核对方法主链和主要证据，未重新审计 Nature 补充材料全部实现细节，标 `M`。
+
+#### TD-MPC（`M`）
+
+**任务导向 latent。** encoder、action-conditioned latent dynamics、reward predictor、双 Q、policy
+prior 共同训练。loss 把多步 latent consistency、reward regression 与 TD value prediction 合在
+一条 unroll 上，EMA target 提供下一 latent/Q target。
+
+**规划。** MPC 在短 horizon latent rollout 中累积 predicted rewards，以 terminal Q 补上长尾；
+候选既可从 Gaussian sampling 也可由 learned policy proposal 提供，执行第一步后重规划。它把
+local model 与 model-free value 的互补性做得很直接。
+
+**边界。** 所有 representation 都围绕当前 task reward/Q，不能当作 reward-free、goal-agnostic
+LeWM。因本轮未逐表复核全部消融，暂标 `M`；完整继任者 TD-MPC2 已在第一批标 `F`。
+
+### 14.13 Decision-aware model learning：RL 怎样直接改变模型目标
+
+#### Value-Aware Model Learning / VAML（`F`）
+
+**目标。** maximum likelihood 要在所有 state directions 拟合 transition；VAML 只要求模型在
+planner 会查询的 value functions 上给出相同 expectation。典型 robust 形式是：
+
+```math
+\mathbb E_{s,a}\sup_{V\in\mathcal F}
+\left|\mathbb E_{s'\sim P}[V(s')]-\mathbb E_{s'\sim\hat P}[V(s')]\right|^2.
+```
+
+当 `F` 是 1-Lipschitz functions 时，它与 Wasserstein discrepancy 相连。模型可以在 pixel/state
+prediction 上“不真实”，却让 Bellman backup 准确。
+
+**边界。** 这是 RL/value 真正进入 model loss 的直接前作，但需要选择 value function class；类太
+窄会丢掉 revaluation 所需信息，太宽又退回完整 dynamics。它优化 decision equivalence，不保证
+物理可解释 latent 或 arbitrary downstream goals。
+
+#### Iterative VAML（`M`）
+
+**方法。** 不再对一个巨大 value class 求最坏情况，而是在 approximate value iteration 中交替：
+用当前 policy/value 采数据；让模型匹配当前 value 在真 transition 与模型 transition 下的
+expectation；再用新模型更新 value/policy。模型准确性跟随实际生成的 value-function sequence。
+
+**意义与边界。** 它把 VAML 从 robust minimax 变成可实现的 moving target，并给出有限样本分析；
+但模型强烈绑定 planner 迭代路径，换 reward/value 后可能失效。实验范围和附录未在本轮完全
+复核，标 `M`。
+
+#### Policy-Aware Model Learning / PAML（`M`）
+
+**目标。** PAML 不匹配 value expectation，而直接让模型环境产生的 policy gradient 接近真实
+环境 gradient，例如最小化
+
+```math
+\|\nabla_\theta J_P(\pi_\theta)-\nabla_\theta J_{\hat P}(\pi_\theta)\|_2^2.
+```
+
+论文分别讨论 REINFORCE 与 deterministic policy-gradient 近似，因而 model loss 同时依赖当前
+policy、visitation distribution、reward/value estimator 和 planner。
+
+**边界。** 它是“RL gradient 教 model 哪些误差重要”的最直接先例之一，但只保证当前 policy
+update 方向，不保证 model rollout、goal replacement 或 policy 外 action query。主体方法已核，
+完整证明和所有实验设置未逐项审计，标 `M`。
+
+#### Value Gradient weighted Model Learning / VaGraM（`F`）
+
+**推导与实现。** 对真实下一 state 邻域的一阶 Taylor expansion 表明，transition error 沿
+`∇V(s')` 大的方向更影响 value。为避开 VAML 在模型 OOD state 上查询不可靠 value 和
+iso-value spurious minima，VaGraM 使用稳定的 diagonal upper-bound 形式：
+
+```math
+\mathcal L_{VaGraM}\approx
+\|\operatorname{diag}(\nabla_{s'}V(s'))(\hat s'-s')\|_2^2.
+```
+
+它保留 supervised next-state target，只把每个 state dimension 按 value sensitivity 加权，能嵌入
+Dyna-style actor-critic。
+
+**边界。** 一阶局部近似依赖 value gradient 的质量和坐标系；若用 learned visual latent，坐标
+旋转会改变 diagonal weighting。它是 LeWM 加 value-gradient loss 必须比较的直接 baseline，
+但本身不提供 reward-free universality。
+
+#### Transition Occupancy Matching / TOM（`F`）
+
+**对象。** 定义当前 policy 下真实/模型 transition occupancy：
+`d_T^pi((s,a),s')=d_T^pi(s,a)T(s'|s,a)`，并最小化两者的 f-divergence，而不是均匀拟合 replay
+中的所有 transition。理论上由此给出 model-based return lower bound。
+
+**实际算法。** 用分类器判别真实与模型 transition occupancy，再把密度比与 policy relevance
+Q/importance weights 转成加权 maximum-likelihood model update；policy 在模型内更新并收集新
+真实数据，形成 on-policy 循环。
+
+**边界。** TOM 优先保证当前 policy 访问处的模型容量，不是 arbitrary-action、policy-independent
+世界模型。它与候选长期 occupancy head 名称相近但方向相反：TOM 用 occupancy 加权 local
+transition，TD-Flow/Jumpy 直接预测 occupancy distribution。
+
+#### Value Equivalence（`F`）
+
+**定义。** 给定 policy 集 `Π` 与 value-function 集 `V`，若对所有 `π ∈ Π, v ∈ V` 都有
+`T^πv = T_hat^πv`，两个模型在该集合上 value equivalent。扩大 policy/value 集会收紧可接受
+模型类；收缩集合则允许大量与真实 dynamics 不同但足以支持指定 planning updates 的模型。
+
+**意义。** 该框架统一解释 MuZero、Predictron 与 value-aware models 为什么可以不重建真实
+observation。它给“模型充分性”一个可操作的 decision-relative 定义。
+
+**边界。** value equivalence 不是 physical equivalence、causal identifiability 或 task-general
+world model。候选方法若声称“更真实”，必须另报 rollout/controllability/OOD revaluation，不能
+只用 control return 证明。
+
+#### Calibrated Value-Aware Model Learning（`M`）
+
+**发现。** 常用 value-aware/MuZero-style surrogate 在 stochastic environments 中可能不
+calibrated：即使数据无限、优化达到总体最优，也未必恢复正确 value/model。论文区分“一个
+deterministic model 能直接预测某个 value”与“model distribution 对后续 planning 校准”两件事，
+并构造 corrected calibrated objectives。
+
+**对本项目的警告。** 直接加 value head 或 TD target 可能得到 task return 好、但 distribution
+错误的 latent operator；一旦换 goal/reward 就暴露问题。当前核过主体定理、反例和主实验，
+尚未逐证明审计全部附录，标 `M`。
+
+### 14.14 结构化与 behavioral representation
+
+#### DeepMDP（`M`）
+
+**方法。** encoder 把 observation 映射到 latent MDP，同时学习 latent reward 与 latent transition
+distribution。理论用 reward prediction error 和 transition distribution discrepancy 界定原 MDP
+与 latent MDP 的 value-function 差异，并把两个预测任务作为 Atari policy 的 auxiliary losses。
+
+**边界。** latent 保存的是当前 reward/value 所需信息，不是 reward-free 完整动力学；理论 metric
+与视觉 encoder 的实际优化之间仍有 gap。本轮核主体理论与实验，未逐证明复核，标 `M`。
+
+#### Deep Bisimulation for Control / DBC（`F`）
+
+**目标。** 随机取两个 transitions，使 latent distance 逼近 bisimulation metric target：即时
+reward difference 加 discount 后的 latent transition Wasserstein distance。Gaussian transition
+下用闭式 `W_2`，target encoder/next latent 通过 stop-gradient 稳定训练，再与 SAC 联训。
+
+```math
+\|z_i-z_j\|_1 \approx |r_i-r_j|+
+\gamma W_2(\hat P(\cdot|z_i,a_i),\hat P(\cdot|z_j,a_j)).
+```
+
+**边界。** reward 相同且未来 reward behavior 相同的视觉状态应被主动合并，这是 task-aware
+invariance，不是“保留全部物理因素”。因此 DBC 能防止无意义 pixel detail 主导 latent，却可能
+正当地坍塌掉换任务后重要的信息。
+
+#### MICo（`F`）
+
+**对象与更新。** MICo 避免 bisimulation 的 optimal-transport coupling，定义当前 policy 下两个
+states 的 diffuse behavioral distance：
+
+```math
+U^\pi(x,y)=|r^\pi(x)-r^\pi(y)|+
+\gamma\mathbb E_{x'\sim P_x^\pi,y'\sim P_y^\pi}U^\pi(x',y').
+```
+
+从 replay 独立采两个 next states 即可做 TD regression，并让 learned representation 的角度/范数
+距离拟合该 target，计算比 bisimulation 简单。
+
+**边界。** independent coupling 使它是 diffuse metric，甚至可能有非零 self-distance；它刻画
+policy-conditioned behavioral similarity，不学习供 MPC 查询的 action-conditioned simulator。
+
+#### Contrastive Learning of Structured World Models / C-SWM（`F`）
+
+**结构。** CNN object extractor 把 frame 分成多个 object slots；共享 object encoder 得到 states；
+graph neural network 按 action 和其他对象消息预测每个 object 的 state delta。positive energy 是
+预测 next slots 与真实 next slots 的平方误差，随机 negative state 通过 margin 被推远：
+
+```math
+H=\frac1K\sum_k d\!\left(z_t^k+T^k(z_t,a_t),z_{t+1}^k\right),\qquad
+\widetilde H=\frac1K\sum_k d\!\left(\widetilde z_t^k,z_{t+1}^k\right),
+\qquad \mathcal L=H+\max(0,\gamma-\widetilde H).
+```
+
+**用途与边界。** 训练完全 reward-free，主要以 multi-step rollout retrieval/ranking 检查对象与
+关系是否被学到。它假定 object factorization 和相对简单的 action作用方式；contrastive ranking
+好不等于 goal cost calibrated，也没有 LeWM 式端到端 MPC 证据。
+
+#### Structured World Belief（`M`）
+
+**belief 而非单 state。** 在部分可观测场景中维护多个 object-centric particles；Sequential Monte
+Carlo 对 action-conditioned dynamics 推进、用 observation likelihood 加权并 resample。object file
+把实体“存在”与当前“可见”分开，slot matching 保持身份，glimpse/attention 只更新观测到部分，
+从而表示 object permanence 与多模态假设。
+
+**控制与边界。** world belief 可先在 random-policy data 上训练，再供 A2C 或 planning 使用。
+它解决的是 partial observability 与 uncertainty，而非 JEPA collapse；代价是 reconstruction/
+likelihood、object discovery 和 particle inference 的复杂组合。本轮未逐项复核全部附录，标 `M`。
+
+### 14.15 两批审计后的创新边界
+
+经过两批方法审计，以下主张已经被直接前作覆盖，不能再作为 TDWM 的核心创新：
+
+1. “RL/value loss 让 JEPA latent 更适合规划”：Value-Guided JEPA、SPR、MuDreamer 已覆盖；
+2. “多步或开放环训练减少 LeWM rollout drift”：PLDM、RC-aux、Fast-LeWM 已覆盖；
+3. “学 temporal distance/reachability 改进 LeWM cost”：RC-aux、Temporal-Distance-JEPA 已覆盖；
+4. “跨 horizon consistency 形成长期模型”：Fast-LeWM、UHM、Jumpy 已覆盖不同接口；
+5. “普通 SIGReg 不够，修正其 latent geometry”：TC-LeWM、PhyLatent、Metric Non-Collapse 已覆盖；
+6. “物理 state/action grounding 让 LeWM 有物理意义”：PhyLatent、PSG-JEPA 已直接覆盖；
+7. “测试时用新 transition 自监督适配”：AdaJEPA 已覆盖；
+8. “加高层 latent action/subgoal 改善长时规划”：Hi-LeWM、LaWAM 已覆盖，并暴露 support gap；
+9. “用 TD 学 reward-free 长期 future 再 zero-shot control”：`gamma`-model、TD-Flow、TD-JEPA、
+   RLDP 和 Jumpy 已形成完整谱系。
+10. “用 RL 主动收集对 world model 最有信息的数据”：PETS 与 Plan2Explore 已覆盖；
+11. “用 value 或 policy gradient 只训练决策相关 dynamics”：VAML、PAML、VaGraM、TOM、
+    Value Equivalence 和 Calibrated VAML 已形成理论与算法谱系；
+12. “在 learned model 里训练 policy 就等于 RL 改善了模型”：World Models、MBPO、Dreamer 系列、
+    SimPLe 与 IRIS 反而说明二者常在梯度上分离，不能据此立项；
+13. “对象级 masking 或显式时间子空间让 LeWM 更物理”：Causal-JEPA 与 SD-JEPA 已直接覆盖；
+14. “高低层 world model 加 macro-action 改善长时规划”：HWM 已在三类 latent WM 上验证。
+
+仍可能值得研究的不是这些模块的简单相加，而是一个更窄、可证伪的接口问题：
+
+> 在同一个 reward-free visual latent 中，能否同时保留 LeWM 对任意 primitive action prefix 的
+> counterfactual local operator，以及 TD-JEPA/Jumpy 对 policy-conditioned 长期 occupancy 的
+> temporally abstract operator，并用可检验的 compatibility 条件证明或实证二者提供互补信息，
+> 而不是 Fast-LeWM 式多 horizon 重参数化、RC-aux 式 reachability head，或 Hi-LeWM 式 hierarchy？
+
+这个问题也不能直接宣称新颖。最低限度必须通过以下判别：长期头在控制参数量和训练数据后，
+对 frozen-LeWM 的误差是否有条件互信息；local-to-occupancy consistency 是否优于分别训练；提升
+是否在同一 solver/budget 下仍存在；是否超出 behavior-policy support；以及优势是否来自新的
+operator relation，而不是额外 reward、proprioception、policy capacity 或 planner compute。
+
+## 15. 参考文献
 
 ### 领域综述与基础
 
@@ -786,6 +1885,9 @@ world-model 与 plan-aware JEPA 工作。
 
 ### Offline、decision-aware 与表示
 
+- GCSL / GCBC：<https://arxiv.org/abs/1912.06088>
+- Implicit Q-Learning：<https://arxiv.org/abs/2110.06169>
+- HIQL / GCIVL：<https://arxiv.org/abs/2307.11949>
 - MOPO：<https://proceedings.neurips.cc/paper/2020/hash/a322852ce0df73e204b7e67cbbef0d0a-Abstract.html>
 - MOReL：<https://proceedings.neurips.cc/paper/2020/hash/f7efa4f864ae9b88d43527f4b14f750f-Abstract.html>
 - COMBO：<https://proceedings.neurips.cc/paper/2021/hash/f29a179746902e331572c483c45e5086-Abstract.html>
@@ -850,6 +1952,7 @@ world-model 与 plan-aware JEPA 工作。
 - Causal-JEPA：<https://arxiv.org/abs/2602.11389>
 - Temporal Straightening：<https://arxiv.org/abs/2603.12231>
 - Hierarchical Planning with Latent World Models：<https://arxiv.org/abs/2604.03208>
+- Subspace-Decomposed JEPAs / SD-JEPA：<https://arxiv.org/abs/2605.31111>
 - RC-aux：<https://arxiv.org/abs/2605.07278>
 - Fast-LeWM：<https://arxiv.org/abs/2606.26217>
 - AdaJEPA：<https://arxiv.org/abs/2606.32026>
