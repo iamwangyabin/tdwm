@@ -13,7 +13,10 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from torchvision.transforms import v2
 
-from tdwm.evaluation.protocol import select_evaluation_points
+from tdwm.evaluation.protocol import (
+    OFFICIAL_LEWM_SELECTION_PROTOCOL,
+    select_evaluation_points,
+)
 from tdwm.training.experiment import (
     canonical_hash,
     dataset_signature,
@@ -206,6 +209,7 @@ def run(args: argparse.Namespace) -> Path:
         "checkpoint": _checkpoint_signature(args.checkpoint, run_root),
         "dataset": dataset_signature(dataset_path, args.dataset_sha256),
         "seed": seed,
+        "selection_protocol": OFFICIAL_LEWM_SELECTION_PROTOCOL,
         "episode_ids": episode_ids,
         "start_steps": start_steps,
     }
