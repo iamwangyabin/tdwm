@@ -7,21 +7,28 @@
 ## 1. 执行摘要
 
 本项目最初的问题是：能否用 reinforcement learning（RL）帮助 LeWorldModel（LeWM），
-得到更适合控制、长期预测和泛化的世界模型？经过从经典 model-based RL、latent world
-model、decision-aware model learning、successor representation、JEPA、机器人视频世界
-模型到 2026 年最新 LeWM 后续工作的系统检索，结论需要比原始设想保守得多。
+得到更适合控制、长期预测和泛化的世界模型？经过从 Dyna、经典 model-based RL、latent
+state-space model、decision-aware model learning、successor representation、JEPA、
+interactive video model、World Action Model、机器人与自动驾驶，到 2026 年最新 LeWM
+后续工作和 world-model evaluation 的系统检索，结论需要比原始设想保守得多。
 
 **有研究意义，但宽泛命题基本都已被覆盖：**
 
 - “用 RL 或 value/TD 信号训练 world model”已有 MuZero、TD-MPC/TD-MPC2、Dreamer、
   VAML/VaGraM/TOM、RLVR-World 等直接前身；
-- “用自监督 latent prediction 防止坍塌并支持 zero-shot RL”已有 SPR、TD-JEPA、RLDP；
+- “用自监督 latent prediction 防止坍塌或支撑控制”已有 SPR、Self-Predictive RL、
+  DreamerPro、MuDreamer、R2-Dreamer、TD-JEPA 和 RLDP；
 - “让 LeWM 更适合规划”已有 Value-guided JEPA、Temporal Straightening、RC-aux、
   Temporal-Distance JEPA、Fast-LeWM 和 Hierarchical Planning；
 - “让 LeWM 更物理、更不坍塌”已有 LeWM/SIGReg、Temporally Centered SIGReg、
   PhyLatent、PSG-JEPA 和 Metric Non-Collapse；
 - “联合一步模型和长期 successor model”与 successor representation、`gamma`-models、
-  TD-Flow、Universal Horizon Models 和 Jumpy World Models 高度重合。
+  TD-Flow、Universal Horizon Models 和 Jumpy World Models 高度重合；
+- “联合预测未来和动作，让 world model 直接帮助 policy”已有 Video Prediction Policy、
+  DreamGen、DreamZero、LaWAM、VLA-MBPO 和 latent-action world models；
+- “视频逼真或 latent 满秩就说明理解物理”证据不足。WorldModelBench、WorldBench、
+  WorldGym 和 MMBench2 共同暴露了物理违背、动作不服从、OOD policy value 偏乐观和
+  visually fluent hallucination。
 
 因此，**当前不能声称提出了新方法**。最值得保留的是一个待证伪的问题，而不是结论：
 
@@ -32,14 +39,28 @@ model、decision-aware model learning、successor representation、JEPA、机器
 
 这个问题仍然拥挤。尤其是 Jumpy World Models 已经学习 policy-conditioned、多时间尺度
 occupancy，并引入跨时间尺度 consistency 用于组合规划；TD-Flow/UHM 已直接学习长期未来
-分布。剩余空间只能来自**端到端视觉 JEPA、primitive-action 任意序列可滚动性、与真实数据
-长期算子的双向一致性，以及严格的 world-model 归因评测**这几个条件的同时成立。若公式级
-比较或 P0 实验不能证明额外价值，应停止此方向，而不是换一个名字继续包装。
+分布；LaWAM 又把 latent future prediction 与动作生成连成了低延迟 policy。剩余空间只能
+来自**端到端视觉 JEPA、primitive-action 任意序列可滚动性、与真实数据长期算子的双向
+一致性，以及严格的 world-model 归因评测**这几个条件的同时成立。若公式级比较或 P0 实验
+不能证明额外价值，应停止此方向，而不是换一个名字继续包装。
+
+### 1.1 调研口径与完整性边界
+
+- 资料以论文原文、正式 proceedings、作者项目页和 Stable World Model 官方文档为主；
+- 从 2025-2026 年综述的 taxonomy 反查历史主线，再沿 LeWM、Dreamer、successor model、
+  video world model、WAM 和 evaluation 做前向近邻检索；
+- 覆盖 architecture、state/action/time representation、training signal、data regime、test-time
+  use、failure mode 和 evaluation evidence，不把“列到论文名”当作已经完成比较；
+- 当前共收录 140 个 primary/official references。2026 年工作大量仍是 preprint，文中将其
+  用于 novelty audit，不把作者报告的结果当作本项目已复现事实。截止日期后的新论文仍需
+  在实验开始前再做一次公式级检索。
 
 ## 2. 什么是 World Model
 
-在控制语境中，world model 不是“看起来合理的视频生成器”的同义词。它至少要保存某种
-可供决策使用的环境状态，并预测动作如何改变未来。一个通用的部分可观测形式是：
+“World model”目前没有全领域一致定义。本文采用与 embodied decision-making 相容的工作
+定义：它是学习环境结构与动力学、并能被 agent 查询或消费的内部 simulator。在控制语境中，
+它不是“看起来合理的视频生成器”的同义词。它至少要保存某种可供决策使用的环境状态，并
+预测动作如何改变未来。一个通用的部分可观测形式是：
 
 ```math
 b_t = E(o_{\le t}, a_{<t}), \qquad
@@ -71,12 +92,38 @@ Need World Models 证明，多步 goal-directed generalization 会在 policy 中
 | 设计轴 | 主要选项 | 直接后果 |
 | --- | --- | --- |
 | 状态 | fully observed state / history / belief | 决定是否能处理 partial observability |
-| 输出 | observation / latent / reward-value / occupancy / video | 决定 fidelity 与 task sufficiency |
-| 时间 | one-step / multi-step / arbitrary horizon / discounted future | 决定误差累积、组合性和推理成本 |
+| 输出 | state / latent / reward-value / occupancy / pixels-video | 决定 fidelity 与 task sufficiency |
+| 空间 | global vector / feature tokens / spatial grid / objects / 3D-4D rendering | 决定几何、交互和计算成本 |
+| 时间 | sequential rollout / multi-step / global difference / arbitrary horizon | 决定误差累积、组合性和推理成本 |
 | 条件 | arbitrary actions / policy / skill / latent action | 决定 counterfactual planning 与复用范围 |
 | 随机性 | deterministic / stochastic / ensemble / generative | 决定多模态未来与 uncertainty 表达 |
 | 用法 | MPC/search / imagination RL / synthetic data / direct policy | 决定公平 baseline 和评价指标 |
 | 数据 | online / offline / video-only / mixed embodiment | 决定 coverage、action labels 和可验证性 |
+
+为避免“彻底”变成无边界罗列，本文覆盖的是**学习得到、面向 embodied decision/control 的
+环境模型**，包括 compact latent MBRL、interactive video simulator、机器人与驾驶 world
+model。纯天气/PDE 预测、无动作的普通视频生成、只讨论语言模型是否隐含世界知识的工作不
+作为直接 baseline；它们只有在提供可查询 action/counterfactual interface 时才进入比较。
+同样，global difference prediction、3D/4D rendering 和驾驶模型属于领域版图，但与
+Stable World Model 上的 compact visual MPC 不是可直接混排的实验对象。
+
+### 2.1 RL 到底可以怎样帮助 World Model
+
+“RL 帮助 LeWM”至少有六种含义，必须先指定梯度、数据和测试接口，否则无法判断是否新：
+
+| 入口 | RL 或 policy 提供的信号 | 改变的对象 | 直接前身 | 对本项目的适用性 |
+| --- | --- | --- | --- | --- |
+| Active data collection | novelty、uncertainty、failure | 真实数据 coverage | Dyna、Plan2Explore、MMBench2 | 固定数据协议外，单独实验 |
+| Control-aware representation | reward、value、action、TD target | encoder/latent geometry | MuZero、TD-MPC、MuDreamer、TD-JEPA | 会改变 reward-free 定义 |
+| Decision-aware model loss | value gradient、occupancy、planner usage | transition model | VAML、VaGraM、PAML、TOM | 可作强 baseline |
+| Imagination policy learning | model rollout 上的 return/critic | actor、critic，间接改变模型访问分布 | Dreamer、TD-MPC2、VLA-MBPO | 属于完整 MBRL，不与纯 MPC 混排 |
+| Temporally abstract prediction | TD recursion、policy occupancy | successor/horizon operator | `gamma`-model、TD-Flow、Jumpy WM | 与候选最接近 |
+| Generator post-training/adaptation | action fidelity、verifiable reward、new transitions | video/latent generator 或 adapter | RLVR-World、RLIR、AdaJEPA、ReDRAW | 可用于 fidelity 或 shift，不自动改善控制 |
+
+在**固定、reward-free、offline trajectories**这一主协议中，可合法使用的主要是行为策略下的
+TD-style predictive target、自监督 action/occupancy signal 和 held-out data calibration。
+它们通常更准确地叫 representation/world-model learning，而不是 online RL。若加入环境
+reward、主动采样或 imagined actor-critic，就必须更换协议并与对应 MBRL/WAM baseline 比较。
 
 本文常用缩写：MBRL 是 model-based RL；MPC 是 model predictive control；CEM/MPPI 是
 两类采样规划器；JEPA 是 joint-embedding predictive architecture；SR/SF 是 successor
@@ -88,10 +135,13 @@ action)` 当监督样本模仿行为策略，本身不做 reward maximization，
 
 ### 3.1 经典显式动力学与不确定性
 
-经典 MBRL 学习 `p(s'|s,a)`，随后用 trajectory optimization 或 policy search 控制。
-PILCO 代表 Gaussian-process 路线；PETS 使用 probabilistic ensembles 和 trajectory
-sampling，把 epistemic 与 aleatoric uncertainty 带入 MPC；MBPO 发现从真实数据状态出发的
-短 imagined rollouts 能在偏差和数据增益之间取得更稳妥的折中。
+Dyna 在 1990 年已经把 real experience、learned model、planning update 和 acting 放进同一
+循环，是“RL 帮助或使用 world model”的历史根。现代经典 MBRL 学习 `p(s'|s,a)`，随后用
+trajectory optimization 或 policy search 控制。PILCO 代表 Gaussian-process 路线；PETS
+使用 probabilistic ensembles 和 trajectory sampling，把 epistemic 与 aleatoric uncertainty
+带入 MPC；MBPO 发现从真实数据状态出发的短 imagined rollouts 能在偏差和数据增益之间取得
+更稳妥的折中。Plan2Explore 则用 ensemble disagreement 作为 imagined novelty，主动采集
+更有利于 task-agnostic world model 的数据，说明 RL 还可以通过**改变数据分布**帮助模型。
 
 这条路线给本项目三条长期有效的教训：
 
@@ -104,13 +154,29 @@ sampling，把 epistemic 与 aleatoric uncertainty 带入 MPC；MBPO 发现从�
 World Models（2018）展示了在压缩视觉 latent 中训练 controller，并可在 imagined world
 中学习。PlaNet 用 RSSM 和 latent overshooting 从像素学习 belief/dynamics，再用 CEM
 规划。Dreamer 系列将主要用途改为 latent imagination 中的 actor-critic 学习，DreamerV2
-使用离散 latent，DreamerV3 则以单一配置扩展到大量 domain。DayDreamer 又把这条路线
-带到真实机器人。
+使用离散 latent，DreamerV3 则以单一配置扩展到大量 domain。Dreamer 4 进一步以 shortcut
+forcing 和高效 Transformer 扩展到 Minecraft，从少量 action-labelled data 学动作条件、从
+大量无标注视频学环境知识，并在纯 offline imagination 中解决超过两万步动作的 diamond
+任务。DayDreamer 又把这条路线带到真实机器人。
 
-IRIS、TWM、STORM 等 Transformer world models 则强化长序列建模和离散 token 生成。
+SimPLe 直接用 learned video model 在低数据 Atari 中训练 policy；I2A 不规定 planner，而让
+policy 学会解释 imperfect model rollouts；SLAC 学 stochastic latent variable model 来提供
+policy state，但不在模型里 rollout policy。这三者分别代表 synthetic environment、learned
+imagination features 与 representation-only use，提醒我们“训练了 dynamics”不等于同一种
+model-based usage。IRIS、TWM、STORM 等 Transformer world models 则强化长序列建模和离散
+token 生成。
 它们回答的是“怎样在 learned simulator 内训练 policy”，与 LeWM 的 reward-free
 image-goal MPC 并不属于同一评测协议，但构成 world-model RL 的主干，不能在相关工作中
-只列 TD-MPC2 而忽略。
+只列 TD-MPC2 而忽略。随机和多模态未来也不能被 deterministic latent MSE 代替；WIMLE
+代表显式 stochastic multi-modal dynamics、ensemble uncertainty 和 confidence-weighted
+synthetic transitions 的路线。
+
+Reconstruction-free MBRL 也不是 LeWM 才出现。DreamerPro 用 prototype assignment 取代
+像素重建，并把 recurrent temporal state 蒸馏进 prototype；MuDreamer 以 value 和 previous
+action prediction 取代 reconstruction，并用 batch normalization 防 collapse；R2-Dreamer
+用 redundancy reduction 作为内部正则，在不依赖 decoder 或 data augmentation 时防止
+collapse；Dreamer-CDP 则把 JEPA-style continuous deterministic prediction 接入 Dreamer。
+因此，“decoder-free + RL + anti-collapse”已经是明确竞争线，而不是待填空白。
 
 ### 3.3 Task-oriented implicit world model
 
@@ -165,6 +231,14 @@ value/policy/transition 可迁移的等价类。C-SWM、Structured World Belief�
 as Learnable Physics Engines、Causal-JEPA、Dyn-O 和 FIOC-WM 则加入 object、relation、
 interaction 或 belief structure，提升组合泛化和可解释性。
 
+更早的 Predictive State Representation 直接用在 action-observation tests 下对可观察未来的
+预测定义 state；Causal State Representation 寻找 joint action-observation histories 的最粗
+充分划分；Causal World Models 则显式估计 latent confounder，以支持 intervention 和
+counterfactual prediction。另一条 operator 路线使用 Koopman lifting，把 nonlinear dynamics
+近似为 observable space 中的线性演化，并与 Bellman/HJB 或 offline RL 结合。这些工作提醒
+我们：有物理或控制意义的 state 不一定等于 encoder 的单帧 embedding，也可能是 history
+equivalence class、predictive tests、objects 或受约束 operator。
+
 这说明“物理意义”必须拆成可测性质：state identifiability、action consequence、object
 permanence、counterfactual separation、equivariance、causal intervention、transition mode
 或 planning transfer。仅展示 PCA、linear probe 或漂亮 rollout 不足以证明模型理解物理。
@@ -201,6 +275,13 @@ DINO-WM 使用 frozen DINOv2 patch features 学 action-conditioned predictor；P
 以 next-embedding prediction + SIGReg 实现较简洁的端到端稳定训练。V-JEPA 2-AC 则展示
 互联网视频预训练加少量无标注机器人视频可以支持 real-robot image-goal planning。
 
+这条路线应追溯到 V-JEPA 的 feature-space masked video prediction，以及 LeJEPA 对 SIGReg
+的系统化。防 collapse 的机制至少有四族：target asymmetry/stop-gradient、negative samples、
+variance-covariance 或 redundancy reduction、以及 reconstruction/physical grounding。
+Self-Predictive RL 还给出了 stop-gradient 与 state/history abstraction 的理论联系。它们解决
+的是优化退化，不自动保证 latent 对 partial observability、counterfactual actions 或 task
+relevant variables 可辨识。
+
 2026 年 LeWM/JEPA 的直接改进非常密集：
 
 | 工作 | 主要问题 | 机制 | 对本项目的影响 |
@@ -220,9 +301,13 @@ DINO-WM 使用 frozen DINOv2 patch features 学 action-conditioned predictor；P
 
 ### 3.9 Foundation/video world models 与 RL post-training
 
-UniSim、Genie、Cosmos、V-JEPA 2 等把 world model 扩展到大规模 action-conditioned video
-simulation、latent actions 和多数据源预训练。它们的目标包括可交互视觉模拟、agent training
-和 evaluation，而不只是紧凑 MPC latent。
+UniSim、Genie、Cosmos、V-JEPA 2 和 iVideoGPT 等把 world model 扩展到大规模
+action-conditioned video simulation、latent actions 和多数据源预训练。iVideoGPT 把
+observation、action、reward 统一 token 化，并在大规模 human/robot trajectories 上预训练，
+再适配 video prediction、planning 和 MBRL。DIAMOND、GameNGen 与 Genie 则代表 diffusion
+或 generative interactive environments：它们可以实时或近实时模拟游戏，但短视频感知质量
+不能代替长期状态、action adherence 和 policy utility 评测。Dreamer 4 正在缩小 scalable
+video world model 与 imagination RL 之间的界线。
 
 更直接地，RLVR-World 已用 verifiable rewards 后训练语言和视频 world models；RLIR 用
 inverse-dynamics action recovery 构造视频 action-following reward；WorldCompass 和
@@ -243,6 +328,44 @@ transition shift 适配本身都不是创新点。**它们可以成为实现手�
 存在，必须来自 local 与 temporally abstract model 的新关系及可归因证据，而不能来自“用了
 adapter”或“看了少量目标域 transition”。
 
+### 3.11 World Action Model、latent action 与机器人 policy
+
+机器人领域正在把“预测未来”和“输出动作”合并。Video Prediction Policy 用 video
+diffusion 内部的 future representations 条件化 inverse dynamics；DreamGen 用 video world
+model 生成 neural trajectories，再用 latent action 或 inverse dynamics 补动作；VeoRL 从
+无标注视频构建 interactive world model，帮助 offline RL。DreamZero 把 pretrained video
+diffusion 改造成同时预测 video 与 action 的 World Action Model，并用于 closed-loop
+zero-shot policy。
+
+与 LeWM 更接近的是 latent-action 路线。Learning Latent Action World Models In The Wild
+从无标签野外视频学连续、受约束 latent actions，并通过已知 action 到 latent action 的
+controller 接回规划；LaWAM 不解码视频，而让 latent-action-conditioned model 预测 latent
+visual subgoals，再条件化 action generation。它说明“latent future 比 pixel video 更高效，
+且能帮助 policy”已经有直接实现。VLA-MBPO 则反向把 pixel world model 当 RL 环境训练 VLA，
+并用 chunk-level branched rollouts 缓解误差累积。
+
+这些方法大多优化 direct policy 或 action chunk，而 LeWM 优化任意 primitive action
+sequence 的 MPC。两者接口不同，但如果本项目引入 actor、inverse dynamics、latent action
+或 joint future-action head，它们就是必须比较的最近邻，不能只对比 TD-JEPA。
+
+### 3.12 显式空间、3D/4D physics 与自动驾驶
+
+world model 的空间表示不只有 global latent vector。object slots/graphs、spatial latent grid、
+BEV/occupancy、point cloud/particles、NeRF 和 Gaussian Splatting 都可以承担 state。HD-VPD
+和 ParticleFormer 用大规模 3D particles/point clouds 表达多物体、多材料动力学；PIN-WM
+将 differentiable rigid-body physics 与 Gaussian Splatting observation loss 结合；Physically
+Controllable World Model 则以可条件查询的概率模型学习 objects、appearance 与 dynamics。
+这条线对“真正物理意义”给出更强、也更昂贵的对照：结构可解释性通常来自明确 spatial
+inductive bias 或 physical variables，而不只是更换 latent regularizer。
+
+自动驾驶形成了另一套重要谱系。MILE 在 camera-only offline data 上联合 world model 与
+driving policy，并以 3D geometry 和可解码 BEV 为归纳偏置；DriveWorld 用 4D scene
+pretraining 服务驾驶感知；GAIA-1 和 DriveDreamer 代表 action-conditioned driving video
+generation；Latent-WAM 则在 multi-view compact scene tokens 中预测未来 world status 并
+直接用于 trajectory planning。这些工作验证 spatial geometry、multi-view consistency 和
+实时性的重要性，但数据、action、state 与指标均不同，不能作为 Stable World Model 四任务
+上的同表 baseline，只能作为结构设计和外部效度证据。
+
 ## 4. World Model 的核心矛盾
 
 ### 4.1 Prediction objective 与 decision objective 不一致
@@ -262,7 +385,9 @@ MuZero 式 task-oriented model 可能 observation fidelity 很差却支持正确
 一步模型 policy-independent、可组合任意 action sequence，对 transition revaluation 灵活，
 但推理时反复 rollout 会累计误差。SR/GHM/TD-Flow 直接缓存长期未来，推理更快、避免逐步
 累积，却依赖 policy 或预训练 skill，面对 transition/policy 变化需要更新。多尺度 world
-model 尝试取中间地带，但必须保证各尺度预测一致。
+model 尝试取中间地带，但必须保证各尺度预测一致。Simulation Lemma 一类结果也从 value
+error 角度说明，小的 transition misspecification 会随有效 planning horizon 放大；因此不能
+用 one-step loss 代替 long-horizon 与 decision-level 证据。
 
 ### 4.3 通用预测与任务充分性的权衡
 
@@ -275,6 +400,11 @@ model 尝试取中间地带，但必须保证各尺度预测一致。
 latent 有满秩协方差，不代表不同物理状态可区分、动作后果正确、距离单调或 counterfactual
 分支分离。SIGReg、orthogonality、whitening 只解决统计退化的一部分；physical grounding、
 metric structure、temporal order 和 causal intervention 是不同性质。
+
+反过来，加入 reward/TD 也不能保证避免 collapse。稀疏 reward 可能只保留极窄 task
+subspace；joint encoder、value 和 model 可能协同漂移；policy-conditioned target 还可能把
+behavior policy 的偏差写进表示。必须分别测试 statistical collapse、physical aliasing、
+action marginalization 和 task over-specialization。
 
 ### 4.5 Offline coverage 与 model exploitation
 
@@ -289,6 +419,15 @@ replanning 和 compute 决定。只报 success 无法判断改进发生在哪。
 即可产生巨大差异，Stable World Model 的 LeWM 消融也显示 CEM 与 gradient solvers 差距
 明显。因此主实验必须固定 planner，并把更强 cost/value 作为单独系统上限。
 
+### 4.7 多模态未来、action identifiability 与 hallucination
+
+相同历史和动作可能对应多个合理未来。deterministic MSE 会平均模式，generative model 又
+可能生成感知上流畅但动力学错误的未来。没有 action labels 时，latent action 还可能把
+camera motion、外部 agent 或环境噪声误认成 controllable action。MMBench2 将生成式 world
+model 的错误区分为 perceptual、action-marginalized 和 scene-diverging hallucination，并将
+其主要关联到 state-action coverage。因此候选方法除 long-horizon error 外，还必须测
+action adherence、多模态 calibration、coverage 和 closed-loop divergence。
+
 ## 5. 最接近候选想法的工作矩阵
 
 候选想法暂称 **primitive local model 与 policy-conditioned horizon model 的协同学习**，
@@ -299,6 +438,8 @@ replanning 和 compute 决定。只报 success 无法判断改进发生在哪。
 | LeWM | 是 | 是 | 是 | 否 | 否 | MPC |
 | PLDM / DINO-WM | 是 | 是 | 是 | 否 | 否 | MPC |
 | TD-MPC2 | 否 | 可 | 是 | Q/actor | joint losses | MPPI/CEM + Q |
+| DreamerPro / R2-Dreamer | 否 | 是 | policy rollout | actor-critic horizon | SSL + latent dynamics | imagination RL |
+| Dreamer 4 / iVideoGPT | mixed | 是 | action-conditioned simulator | 长视频/agent horizon | sequence model | imagination RL / planning |
 | VAML / TOM | 依实现 | 可 | 是 | value/occupancy | model-data decision objective | policy/MPC |
 | MVE / STEVE | online 或 replay | 可 | 短 rollout | terminal value | 按 horizon/uncertainty 组合 | policy/value learning |
 | FB / One-step FB | 是 | 可 | 否 | 是 | successor factorization | direct policy |
@@ -310,9 +451,13 @@ replanning 和 compute 决定。只报 success 无法判断改进发生在哪。
 | Fast-LeWM | 是 | 是 | action-prefix | 否 | 多 horizon supervision | MPC |
 | RC-aux / Temporal-Distance | 是 | 是 | 是 | reachability/temporal cost | rollout-aligned auxiliary | MPC |
 | ReDRAW / AdaJEPA | source pretrain + 少量 target transition | 是 | 是 | 否 | residual 或 online recalibration | adaptation + control |
+| DreamZero / LaWAM | offline mixed robot data | 是 | direct action/chunk | future video 或 latent subgoal | joint world-action modeling | direct policy |
+| Latent Action WM | video-only 可预训练 | 是 | 需 action mapper | latent-action-conditioned | inverse/forward consistency | planning / policy |
 | 候选问题 | 是 | 是 | 是 | 是 | local rollout 对 data-derived horizon operator | MPC，必要时 direct policy |
 
-最危险的近邻不是 TD-JEPA，而是 **Jumpy World Models + TD-Flow/UHM + VAML/TOM** 的组合。
+若候选保持纯 MPC，最危险的近邻不是 TD-JEPA，而是 **Jumpy World Models + TD-Flow/UHM +
+VAML/TOM** 的组合；若加入 actor、latent action 或 action generation，**LaWAM/DreamZero**
+立即成为同等重要的近邻。
 候选工作必须逐条回答：
 
 1. 为什么需要显式 primitive LeWM，而不是直接使用 GHM/UHM/Jumpy model？
@@ -320,6 +465,7 @@ replanning 和 compute 决定。只报 success 无法判断改进发生在哪。
 3. data target 是 value、feature expectation、density/flow 还是 occupancy ratio？
 4. 为什么它比 multi-horizon prediction 或 Temporal-Distance rollout consistency 更有信息？
 5. 改进是否发生在 encoder/dynamics，而不是新 terminal value、policy 或 planner cost？
+6. 若使用 latent action 或 policy head，为什么不是 LaWAM/DreamZero 的较小规模变体？
 
 在这些问题回答前，不应锁定模型架构或命名。
 
@@ -328,13 +474,16 @@ replanning 和 compute 决定。只报 success 无法判断改进发生在哪。
 | 原始主张 | 判断 | 原因 |
 | --- | --- | --- |
 | RL 帮助 LeWM | 太宽泛 | MBRL、TD-MPC、Dreamer、RLVR-World 都已覆盖 |
-| TD 防止特征坍塌 | 不足以创新 | SPR 理论、TD-JEPA、RLDP、SIGReg 后续已覆盖 |
+| TD 防止特征坍塌 | 不足以创新 | Self-Predictive RL、TD-JEPA、RLDP、SIGReg 后续已覆盖 |
+| decoder-free MBRL 防坍塌 | 不新 | DreamerPro、MuDreamer、R2-Dreamer、Dreamer-CDP 已直接覆盖 |
 | 首次得到物理 latent | 不成立 | LeWM probes、PhyLatent、PSG-JEPA、物理结构 WM |
 | 用 value 校准 dynamics | 不新 | VAML、VaGraM、Value Equivalence、TOM |
 | reward-free reachability | 不新 | HILP、RC-aux、Temporal-Distance JEPA |
 | 一步 + 长期 model | 高度拥挤 | SR、`gamma`-model、TD-Flow、UHM、Jumpy WM |
 | transition revaluation | 不能独立成贡献 | model-based/SR 文献与 AdaJEPA 已直接研究 |
 | latent dynamics residual adapter | 不新 | ReDRAW 已直接用于视觉 world-model adaptation |
+| 联合预测未来与动作 | 不新 | VPP、DreamZero、LaWAM 和 latent-action WM 已覆盖 |
+| 视频逼真证明可作为 simulator | 证据不足 | WorldModelBench、WorldBench、WorldGym、MMBench2 均显示缺口 |
 | 更高 success 就是更好 WM | 错误归因 | success 与 cost、solver、value、policy 强耦合 |
 
 ## 7. 当前仍可检验的候选问题
@@ -357,7 +506,8 @@ horizon-conditioned future embedding error。具体形式必须在复现 Jumpy W
 3. 比 one-step/multi-horizon latent prediction、VAML/TOM surrogate、Jumpy consistency 都强；
 4. 在 frozen planner cost 下提升，而不是依赖 successor terminal value；
 5. 在 reward revaluation 与 transition revaluation 中呈现可解释的互补优势；
-6. 对 encoder、dynamics、cost 和 policy 的梯度路径有明确归因。
+6. 在 held-out actions 上保持 action adherence，不产生 action-marginalized hallucination；
+7. 对 encoder、dynamics、cost 和 policy 的梯度路径有明确归因。
 
 ### 7.3 应优先探索的三条窄路线
 
@@ -393,8 +543,10 @@ FB、One-step FB、HILP、FRE。Direct policy 与 MPC 分开报告，不做混�
 
 ### 8.3 协议 C：Reward-labelled control
 
-TD-MPC2、Dreamer 和 value-aware model losses 需要 reward，应单独比较。只有 reward
-labels、online interaction、replay、updates 和 evaluation budget 相同，才可作系统结论。
+TD-MPC2、Dreamer、R2-Dreamer 和 value-aware model losses 需要 reward，应单独比较。
+只有 reward labels、online interaction、replay、updates 和 evaluation budget 相同，才可
+作系统结论。Dreamer 4 的数据规模和任务跨度不同，只作 foundation-scale evidence，除非能
+构造 matched-data、matched-compute 配置，否则不能放入本项目主排行榜。
 
 ### 8.4 协议 D：Long-horizon predictive models
 
@@ -413,6 +565,20 @@ future-state metric 下比较。该协议先回答候选 operator 是否真的�
 successor-only update、LeWM local update、AdaJEPA 式 test-time update 和候选方法。
 若设置包含 source-to-target dynamics shift，还必须加入 ReDRAW 式 latent residual adaptation。
 
+### 8.6 协议 F：World Action Model 与 action interface
+
+只有候选引入 actor、inverse dynamics、latent actions 或 action chunks 时才启用。比较至少
+包含 BC/GCBC、frozen world model + same policy head、VPP-style future feature policy、
+latent-action model 和 LaWAM-style latent subgoal policy。必须分别报告：
+
+- action-labelled、video-only 和 mixed-embodiment 数据量；
+- primitive action、latent action 与 action chunk 的控制频率和 horizon；
+- open-loop action prediction 与 closed-loop success；
+- latency、replanning rate、action adherence 和 cross-embodiment transfer。
+
+Direct policy、MPC 和 world-model environment 内训练的 policy 属于三种不同用法，不混成
+同一排行榜。DreamZero/VLA-MBPO 只能在输入、动作接口和数据预算可比时作直接 baseline。
+
 ## 9. 归因矩阵
 
 | 编号 | 设置 | 回答的问题 |
@@ -428,9 +594,11 @@ successor-only update、LeWM local update、AdaJEPA 式 test-time update 和候�
 | A8 | 仅 successor terminal cost | 是否只是 planner enhancement |
 | A9 | matched random auxiliary / extra parameters | 是否只是容量和正则收益 |
 | A10 | equal compute and update counts | 是否只是更多训练 |
+| A11 | shuffled/zeroed actions 与 held-out action branches | 模型是否真正使用 action |
+| A12 | matched redundancy-reduction regularizer | 收益是否只是 R2-Dreamer 式 anti-collapse |
 
-主结论必须来自 A0、A3、A4、A5、A6、A7 在**相同原始 planner cost**下的比较。A8 只能
-作为系统上限单列。
+主结论必须来自 A0、A3、A4、A5、A6、A7、A11、A12 在**相同原始 planner cost**下的
+比较。A8 只能作为系统上限单列。
 
 ## 10. 评价指标
 
@@ -440,6 +608,8 @@ successor-only update、LeWM local update、AdaJEPA 式 test-time update 和候�
 - 5/10/20/50-step open-loop error，按 horizon 作曲线；
 - posterior-free rollout 与 teacher-forced rollout 的 gap；
 - action sensitivity、counterfactual branch separation；
+- action adherence，以及 perceptual/action-marginalized/scene-diverging failure rate；
+- stochastic calibration、mode coverage 与多样性，不只报平均预测；
 - calibrated uncertainty、ensemble disagreement 与 OOD detection；
 - held-out policy 下的 future-state/occupancy/operator error；
 - local rollout 与 horizon model 的 disagreement。
@@ -457,12 +627,35 @@ successor-only update、LeWM local update、AdaJEPA 式 test-time update 和候�
 
 - fixed-cost MPC success 和逐 episode outcome；
 - planner regret 或 candidate-ranking accuracy；
+- policy-value correlation、policy-ranking agreement 与 ID/OOD calibration；
+- 用模型训练或选择 policy 后，相对不用模型的 optimization lift；
+- adversarial/exploitability audit：policy 是否主动寻找模型漏洞；
 - trajectory stitching；
 - reward、policy、transition revaluation；
 - planning latency、model calls、参数量、显存和 wall-clock；
 - failure attribution：model、cost、search、value、policy 或 data support。
 
-### 10.4 证据口径
+### 10.4 从“像”到“可用于决策”的证据阶梯
+
+评价不能只在一个数字上完成。参考 decision-making-centric 的 L0-L7 思路，本项目采用下列
+逐层证据，后一层不能由前一层自动推出：
+
+| 层次 | 本项目要求的证据 | 能支持的最强表述 |
+| --- | --- | --- |
+| E0 | 可视化、latent rollout sanity check | 模型能生成或滚动 |
+| E1 | pixel/feature/state prediction、physics probes | 对被测变量有预测 fidelity |
+| E2 | held-out action sensitivity、action adherence | 学到了动作干预效应 |
+| E3 | closed-loop long rollout、OOD 和 uncertainty calibration | 在被测分布上可充当有限 simulator |
+| E4 | reward/value error 与 policy-ranking agreement | 可辅助 policy evaluation |
+| E5 | fixed-budget planning success、candidate ranking | 可辅助 planning |
+| E6 | policy optimization lift 与 exploitability audit | 可作为 policy learning environment |
+| E7 | 新任务/新动力学/真实系统 transfer | 有超出 benchmark 的决策效度 |
+
+WorldModelBench/WorldBench 主要补 E1 的物理诊断；WorldGym/WorldEval 触及 E2-E4；真正
+声称“RL 改善了 LeWM”至少需要 E1、E2、E5 同时改善，声称“可在模型内训练 policy”还需要
+E6。视觉 plausibility、effective rank 或单一 success rate 都不能单独越级。
+
+### 10.5 证据口径
 
 作者报告、第三方 checkpoint、本项目复现必须分开。Stable World Model 当前公开四任务
 结果为：
@@ -520,17 +713,20 @@ cosine similarity。加入 physical probes、rank、OOD support 和多 seed。
 3. frozen LeWM + same stack、RLDP、multi-horizon prediction、VAML surrogate 和 Jumpy/
    TD-Flow baseline 不能解释增益；
 4. 一步预测、长时 rollout、latent rank 与 physical probes 没有明显退化；
-5. 至少在一种 reward/transition revaluation 中展示局部模型和长期模型的互补性；
-6. 多 seed 置信区间支持结论。
+5. held-out actions 上的 adherence、closed-loop divergence 和 uncertainty 没有退化；
+6. 至少在一种 reward/transition revaluation 中展示局部模型和长期模型的互补性；
+7. 多 seed 置信区间支持结论。
 
 满足以下任一项则停止或改题：
 
 - frozen LeWM/RLDP 已获得全部收益；
+- R2-Dreamer 式 redundancy reduction 已获得全部 anti-collapse 收益；
 - 只有新 value/cost head 提升 success；
 - Jumpy WM、UHM、Fast-LeWM 或普通 multi-horizon loss 达到相同结果；
 - ReDRAW 式 residual adapter 已解释适配收益；
 - method 只在单一 reward 或饱和 benchmark 有效；
 - successor/model joint training 在低 coverage 下不稳定或利用 OOD actions；
+- 增益伴随 action marginalization、mode averaging 或 policy-ranking 失真；
 - 公式与现有 cross-timescale consistency 没有实质区别。
 
 ## 13. 当前建议
@@ -538,7 +734,8 @@ cosine similarity。加入 physical probes、rank、OOD support 和多 seed。
 现阶段不应直接实现一个叫 “RL-assisted LeWM” 的完整系统。优先级应为：
 
 1. 复现 LeWM 并固定 Stable World Model 评测协议；
-2. 复现 RLDP、TD-JEPA，以及至少一个 GHM/TD-Flow/UHM/Jumpy 长期模型；
+2. 复现 RLDP、TD-JEPA、matched anti-collapse baseline，以及至少一个
+   GHM/TD-Flow/UHM/Jumpy 长期模型；
 3. 做 frozen-LeWM horizon diagnostic，检验长期 operator 是否提供独立信息；
 4. 只有诊断成立，再设计最小 adapter objective；
 5. 方法名、完整架构和论文主张留到 P0 实验之后。
@@ -555,7 +752,12 @@ world-model 与 plan-aware JEPA 工作。
 
 ### 领域综述与基础
 
+- A Definition and Roadmap for World Models：<https://arxiv.org/abs/2607.06401>
+- A Comprehensive Survey on World Models for Embodied AI：<https://arxiv.org/abs/2510.16732>
 - World Model for Robot Learning: A Comprehensive Survey：<https://arxiv.org/abs/2605.00080>
+- Video Generation Models in Robotics：<https://arxiv.org/abs/2601.07823>
+- Dyna：<https://www.derongliu.org/adp/adp-cdrom/refs/sutton19900216.pdf>
+- Plan2Explore：<https://proceedings.mlr.press/v119/sekar20a.html>
 - General Agents Need World Models：<https://proceedings.mlr.press/v267/richens25a.html>
 - World Models：<https://arxiv.org/abs/1803.10122>
 - PILCO：<https://mlanthology.org/icml/2011/deisenroth2011icml-pilco/>
@@ -563,7 +765,15 @@ world-model 与 plan-aware JEPA 工作。
 - Dreamer：<https://arxiv.org/abs/1912.01603>
 - DreamerV2：<https://arxiv.org/abs/2010.02193>
 - DreamerV3：<https://www.nature.com/articles/s41586-025-08744-2>
+- Dreamer 4：<https://arxiv.org/abs/2509.24527>
+- DreamerPro：<https://proceedings.mlr.press/v162/deng22a.html>
+- MuDreamer：<https://arxiv.org/abs/2405.15083>
+- R2-Dreamer：<https://arxiv.org/abs/2603.18202>
+- Dreamer-CDP：<https://arxiv.org/abs/2603.07083>
 - DayDreamer：<https://proceedings.mlr.press/v205/wu23c.html>
+- Imagination-Augmented Agents：<https://arxiv.org/abs/1707.06203>
+- SimPLe：<https://arxiv.org/abs/1903.00374>
+- SLAC：<https://arxiv.org/abs/1907.00953>
 - MuZero：<https://www.nature.com/articles/s41586-020-03051-4>
 - PETS：<https://proceedings.neurips.cc/paper/2018/hash/3de568f8597b94bda53149c7d7f5958c-Abstract.html>
 - MBPO：<https://proceedings.neurips.cc/paper/2019/hash/5faf461eff3099671ad63c6f3f094f7f-Abstract.html>
@@ -572,6 +782,7 @@ world-model 与 plan-aware JEPA 工作。
 - STORM：<https://arxiv.org/abs/2310.09615>
 - TD-MPC：<https://arxiv.org/abs/2203.04955>
 - TD-MPC2：<https://arxiv.org/abs/2310.16828>
+- WIMLE：<https://arxiv.org/abs/2602.14351>
 
 ### Offline、decision-aware 与表示
 
@@ -599,6 +810,11 @@ world-model 与 plan-aware JEPA 工作。
 - C-SWM：<https://openreview.net/forum?id=H1gax6VtDB>
 - Structured World Belief：<https://arxiv.org/abs/2107.08577>
 - Graph Networks as Learnable Physics Engines：<https://proceedings.mlr.press/v80/sanchez-gonzalez18a.html>
+- Predictive Representations of State：<https://papers.nips.cc/paper_files/paper/2001/hash/1e4d36177d71bbb3558e43af9577d70e-Abstract.html>
+- Learning Causal State Representations：<https://arxiv.org/abs/1906.10437>
+- Causal World Models：<https://arxiv.org/abs/2012.14228>
+- Koopman Q-learning：<https://proceedings.mlr.press/v162/weissenbacher22a.html>
+- Koopman-Assisted RL：<https://arxiv.org/abs/2403.02290>
 - Dyn-O：<https://arxiv.org/abs/2507.03298>
 - FIOC-WM：<https://arxiv.org/abs/2511.02225>
 
@@ -621,6 +837,10 @@ world-model 与 plan-aware JEPA 工作。
 
 ### JEPA、LeWM 与视觉规划
 
+- V-JEPA：<https://arxiv.org/abs/2404.08471>
+- LeJEPA / SIGReg：<https://arxiv.org/abs/2511.08544>
+- SPR：<https://arxiv.org/abs/2007.05929>
+- Self-Predictive RL：<https://arxiv.org/abs/2401.08898>
 - DINO-WM：<https://arxiv.org/abs/2411.04983>
 - PLDM：<https://arxiv.org/abs/2502.14819>
 - LeWM：<https://arxiv.org/abs/2603.19312>
@@ -645,6 +865,9 @@ world-model 与 plan-aware JEPA 工作。
 
 - UniSim：<https://arxiv.org/abs/2310.06114>
 - Genie：<https://arxiv.org/abs/2402.15391>
+- iVideoGPT：<https://proceedings.neurips.cc/paper_files/paper/2024/hash/7dbb5bfab324e3b86af9bd0df15498dd-Abstract-Conference.html>
+- DIAMOND：<https://arxiv.org/abs/2405.12399>
+- GameNGen：<https://gamengen.github.io/>
 - Cosmos：<https://arxiv.org/abs/2501.03575>
 - RLVR-World：<https://proceedings.neurips.cc/paper_files/paper/2025/hash/b63a24a1832bd14fa945c71f535c0095-Abstract-Conference.html>
 - RLIR：<https://arxiv.org/abs/2509.23958>
@@ -655,5 +878,38 @@ world-model 与 plan-aware JEPA 工作。
 - ReDRAW：<https://proceedings.mlr.press/v331/lanier26a.html>
 - SPREAD：<https://doi.org/10.1109/LRA.2026.3688061>
 - Policy-Driven World Model Adaptation：<https://arxiv.org/abs/2505.13709>
+
+### World Action Model、机器人与显式空间模型
+
+- Video Prediction Policy：<https://proceedings.mlr.press/v267/hu25g.html>
+- DreamGen：<https://proceedings.mlr.press/v305/jang25a.html>
+- VeoRL：<https://arxiv.org/abs/2505.06482>
+- World Action Models are Zero-shot Policies / DreamZero：<https://arxiv.org/abs/2602.15922>
+- LaWAM：<https://arxiv.org/abs/2606.15768>
+- Learning Latent Action World Models In The Wild：<https://arxiv.org/abs/2601.05230>
+- VLA-MBPO：<https://arxiv.org/abs/2603.20607>
+- HD-VPD：<https://proceedings.mlr.press/v270/whitney25a.html>
+- ParticleFormer：<https://openreview.net/forum?id=7wGYX11BJB>
+- PIN-WM：<https://arxiv.org/abs/2504.16693>
+- Physical Object Understanding with a Physically Controllable World Model：<https://openaccess.thecvf.com/content/CVPR2026/html/Venkatesh_Physical_Object_Understanding_with_a_Physically_Controllable_World_Model_CVPR_2026_paper.html>
+- MILE：<https://arxiv.org/abs/2210.07729>
+- DriveWorld：<https://openaccess.thecvf.com/content/CVPR2024/html/Min_DriveWorld_4D_Pre-trained_Scene_Understanding_via_World_Models_for_Autonomous_Driving_CVPR_2024_paper.html>
+- GAIA-1：<https://arxiv.org/abs/2309.17080>
+- DriveDreamer：<https://arxiv.org/abs/2309.09777>
+- Latent-WAM for Autonomous Driving：<https://arxiv.org/abs/2603.24581>
+
+### World-model evaluation 与失效诊断
+
+- How Should World Models Be Evaluated for Embodied Decision-Making?：<https://arxiv.org/abs/2606.15032>
+- WorldModelBench：<https://arxiv.org/abs/2502.20694>
+- WorldBench：<https://arxiv.org/abs/2601.21282>
+- 4DWorldBench：<https://arxiv.org/abs/2511.19836>
+- WorldGym / Evaluating Robot Policies in a World Model：<https://arxiv.org/abs/2506.00613>
+- WorldEval：<https://arxiv.org/abs/2505.19017>
+- Hallucination in World Models is Predictable and Preventable：<https://arxiv.org/abs/2606.27326>
+- An Optimal Tightness Bound for the Simulation Lemma：<https://rlj.cs.umass.edu/2024/papers/Paper106.html>
+
+### 项目平台
+
 - Stable World Model 平台：<https://galilai-group.github.io/stable-worldmodel/>
 - Stable World Model baselines：<https://galilai-group.github.io/stable-worldmodel/baselines/>
