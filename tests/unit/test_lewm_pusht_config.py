@@ -1,9 +1,8 @@
 import ast
 from pathlib import Path
+
 import tomllib
-
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

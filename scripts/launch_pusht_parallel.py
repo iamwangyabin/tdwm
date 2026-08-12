@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tdwm.training.experiment import (
+    canonical_hash,
+    dataset_signature,
+    git_state,
+)
 
 DEFAULT_METHODS = ("pldm", "dino_wm", "gcbc", "gcivl", "gciql")
 
@@ -72,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Keep all free GPUs busy with single-seed PushT baselines."
     )
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--dataset-sha256")
     parser.add_argument("--run-root", required=True)
     parser.add_argument("--seed", required=True, type=int)
     parser.add_argument("--methods", nargs="+", default=list(DEFAULT_METHODS))
@@ -96,7 +102,33 @@ def main() -> None:
     if not dataset.exists():
         raise FileNotFoundError(dataset)
     run_root.mkdir(parents=True, exist_ok=True)
-    launcher_dir = run_root / "launcher" / f"pusht_parallel_seed{args.seed}"
+    request_identity = {
+        "git": git_state(root),
+        "dataset": dataset_signature(dataset, args.dataset_sha256),
+        "seed": args.seed,
+        "methods": args.methods,
+        "workers": args.workers,
+        "checkpoint_steps": args.checkpoint_steps,
+        "environment_config_sha256": canonical_hash(
+            (root / "configs" / "envs" / "pusht.yaml").read_text(
+                encoding="utf-8"
+            )
+        ),
+        "method_config_sha256": {
+            method: canonical_hash(
+                (root / "configs" / "methods" / f"{method}.yaml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            for method in args.methods
+        },
+    }
+    request_fingerprint = canonical_hash(request_identity)
+    launcher_dir = (
+        run_root
+        / "launcher"
+        / f"pusht_parallel_seed{args.seed}_{request_fingerprint[:12]}"
+    )
     launcher_dir.mkdir(parents=True, exist_ok=True)
     state_path = launcher_dir / "state.json"
 
@@ -164,14 +196,14 @@ def main() -> None:
                 str(dataset),
                 "--run-root",
                 str(run_root),
-                "--run-id",
-                f"{method}_pusht_seed{args.seed}",
                 "--workers",
                 str(args.workers),
                 "--checkpoint-steps",
                 str(args.checkpoint_steps),
                 "--resume",
             ]
+            if args.dataset_sha256:
+                command.extend(["--dataset-sha256", args.dataset_sha256])
             process = subprocess.Popen(
                 command,
                 cwd=root,
@@ -186,6 +218,8 @@ def main() -> None:
             state_path,
             {
                 "updated_at": datetime.now(timezone.utc).isoformat(),
+                "request_fingerprint": request_fingerprint,
+                "request_identity": request_identity,
                 "seed": args.seed,
                 "dataset": str(dataset),
                 "run_root": str(run_root),

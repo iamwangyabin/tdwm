@@ -50,13 +50,13 @@ evaluation:
     - method: set_state
       args:
         qpos:
-          dataset_key: qpos
+          value: qpos
         qvel:
-          dataset_key: qvel
+          value: qvel
     - method: set_target_qpos
       args:
         target_qpos:
-          dataset_key: goal_qpos
+          value: goal_qpos
 
 planning:
   solver: cem

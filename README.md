@@ -6,34 +6,68 @@ single-seed adapters for LeWM, PLDM, DINO-WM, GCBC, GCIVL, and GCIQL. TD-MPC2
 remains protocol-gated because its online reward/Q objective is not comparable
 to this offline experiment group.
 
-The dataset and all generated checkpoints remain outside Git. With the PushT
-Lance dataset already available, launch the configured run with:
+Install the repository in an isolated Python 3.10+ environment, then verify the
+pinned platform before starting a long GPU run:
+
+```bash
+python -m pip install -e ".[dev]"
+python scripts/smoke_swm.py --dataset /path/to/pusht_expert_train.h5
+python -m pytest -q
+```
+
+The dataset and all generated checkpoints remain outside Git. With the
+decompressed PushT HDF5 dataset available, launch a configured run with:
 
 ```bash
 python scripts/train.py \
   --env pusht \
   --method lewm \
   --seed 3072 \
-  --dataset /path/to/pusht_expert_train.lance \
+  --dataset /path/to/pusht_expert_train.h5 \
   --run-root /path/to/persistent/tdwm-runs
 ```
 
 The command reads `configs/envs/pusht.yaml` and the selected method YAML as the
 experiment's source of truth. It refuses to run if the imported
-`stable_worldmodel` is not the installed `0.1.1` distribution. To keep four
-GPUs occupied while the five additional methods train, use the resumable queue:
+`stable_worldmodel` is not the installed `0.1.1` distribution. Training and
+validation are split by episode, and normalization statistics are calculated
+from training episodes only.
+
+Run directories are named from the code, configuration, dataset signature,
+split, and seed. Resume is rejected if an explicit `--run-id` already belongs
+to a different experiment. For stronger dataset identity, pass a precomputed
+`--dataset-sha256 HASH`.
+
+To keep four GPUs occupied while the five additional methods train, use the
+resumable queue:
 
 ```bash
 python scripts/launch_pusht_parallel.py \
   --seed 3072 \
-  --dataset /path/to/pusht_expert_train.lance \
+  --dataset /path/to/pusht_expert_train.h5 \
   --run-root /path/to/persistent/tdwm-runs
 ```
 
-The launcher starts at most one method per GPU, writes its state and per-method
-logs under `RUN_ROOT/launcher/pusht_parallel_seed3072/`, and starts queued
-methods whenever a GPU becomes free. GCIVL and GCIQL preserve their released
-two-stage value/critic-then-policy training protocols.
+The launcher starts at most one method per GPU, writes state and per-method logs
+under a fingerprinted `RUN_ROOT/launcher/` directory, and starts queued methods
+when a GPU becomes free. GCIVL and GCIQL preserve their released two-stage
+value/critic-then-policy training protocols.
+
+Evaluate an exported epoch through the same dataset-backed protocol. Specify
+the checkpoint file because each run normally contains several epochs:
+
+```bash
+python scripts/evaluate.py \
+  --env pusht \
+  --method lewm \
+  --checkpoint lewm_pusht_seed3072_FINGERPRINT/weights_epoch_10.pt \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+```
+
+The evaluation record stores the exact episode IDs, start steps, seed,
+checkpoint signature, configuration, raw metrics, and elapsed time under
+`RUN_ROOT/evaluations/`.
 
 If the training node cannot reach Hugging Face, place the official
 `facebook/dinov2-small` snapshot in persistent storage and set
@@ -73,7 +107,7 @@ mounted to persistent storage:
 
 ```bash
 docker run --rm --gpus '"device=0"' --ipc=host \
-  -v /local/pusht_expert_train.lance:/datasets/pusht_expert_train.lance:ro \
+  -v /local/pusht_expert_train.h5:/datasets/pusht_expert_train.h5:ro \
   -v /local/tdwm-runs:/workspace/runs \
   -v /local/stable-worldmodel-cache:/workspace/cache/stable_worldmodel \
   tdwm:runtime \
@@ -81,7 +115,7 @@ docker run --rm --gpus '"device=0"' --ipc=host \
     --env pusht \
     --method lewm \
     --seed 3072 \
-    --dataset /datasets/pusht_expert_train.lance \
+    --dataset /datasets/pusht_expert_train.h5 \
     --run-root /workspace/runs
 ```
 

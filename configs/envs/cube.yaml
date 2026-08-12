@@ -56,17 +56,18 @@ evaluation:
     - method: set_state
       args:
         qpos:
-          dataset_key: qpos
+          value: qpos
         qvel:
-          dataset_key: qvel
+          value: qvel
     - method: set_target_pos
       args:
         cube_id:
-          literal: 0
+          value: 0
+          in_dataset: false
         target_pos:
-          dataset_key: goal_privileged_block_0_pos
+          value: goal_privileged_block_0_pos
         target_quat:
-          dataset_key: goal_privileged_block_0_quat
+          value: goal_privileged_block_0_quat
 
 planning:
   solver: cem

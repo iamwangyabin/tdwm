@@ -7,21 +7,25 @@ import math
 import multiprocessing as mp
 import os
 import platform
-import subprocess
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import lightning as pl
-import numpy as np
 import stable_worldmodel as swm
 import torch
 import yaml
 from hydra.utils import instantiate
 from lightning.pytorch.loggers import CSVLogger
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 
+from tdwm.training.data import column_statistics, make_episode_split
+from tdwm.training.experiment import (
+    dataset_signature,
+    git_state,
+    prepare_run_directory,
+)
 
 PINNED_STABLE_WORLDMODEL_VERSION = "0.1.1"
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -79,17 +83,6 @@ def _verify_installed_platform() -> None:
         )
 
 
-def _git_commit() -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_repo_root(),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
-
-
 class SequenceTransform:
     """Normalize image and state-like columns without changing the dataset."""
 
@@ -121,21 +114,6 @@ class SequenceTransform:
             )
             output[key] = (tensor - mean) / std
         return output
-
-
-def _column_statistics(dataset: Any, keys: list[str]) -> dict[str, Any]:
-    statistics: dict[str, Any] = {}
-    for key in keys:
-        values = np.asarray(dataset.get_col_data(key), dtype=np.float32)
-        values = values.reshape(-1, values.shape[-1])
-        mean = np.nanmean(values, axis=0)
-        std = np.nanstd(values, axis=0)
-        std = np.where(std < 1e-8, 1.0, std)
-        statistics[key] = {
-            "mean": mean.astype(float).tolist(),
-            "std": std.astype(float).tolist(),
-        }
-    return statistics
 
 
 class LeWMTrainingModule(pl.LightningModule):
@@ -322,21 +300,46 @@ def run(args: argparse.Namespace) -> None:
         keys_to_cache=list(loader_config.get("keys_to_cache", [])),
         transform=None,
     )
+    split = loader_config["split"]
+    episode_split = make_episode_split(
+        dataset.clip_indices,
+        train_fraction=float(split["train"]),
+        seed=int(split["seed"]),
+    )
     normalizer_keys = [
         key for key in loader_config["keys_to_load"] if key != "pixels"
     ]
-    statistics = _column_statistics(dataset, normalizer_keys)
-    dataset.transform = SequenceTransform(statistics)
-
-    split = loader_config["split"]
-    train_length = int(len(dataset) * float(split["train"]))
-    validation_length = len(dataset) - train_length
-    split_generator = torch.Generator().manual_seed(int(split["seed"]))
-    train_dataset, validation_dataset = random_split(
-        dataset,
-        [train_length, validation_length],
-        generator=split_generator,
+    statistics = column_statistics(
+        dataset, normalizer_keys, episode_split.train_episodes
     )
+    dataset.transform = SequenceTransform(statistics)
+    train_indices, validation_indices = episode_split.indices_for(
+        dataset.clip_indices
+    )
+    train_dataset = Subset(dataset, train_indices)
+    validation_dataset = Subset(dataset, validation_indices)
+    train_length = len(train_dataset)
+    validation_length = len(validation_dataset)
+
+    repository_state = git_state(root)
+    data_signature = dataset_signature(dataset_path, args.dataset_sha256)
+    identity = {
+        "git": repository_state,
+        "environment_config": environment,
+        "method_config": method,
+        "seed": args.seed,
+        "dataset": data_signature,
+        "split": episode_split.as_dict(),
+    }
+    run_id, run_dir, experiment_fingerprint = prepare_run_directory(
+        run_root=run_root,
+        requested_run_id=args.run_id,
+        method=args.method,
+        environment=args.env,
+        seed=args.seed,
+        identity=identity,
+    )
+
     loader_generator = torch.Generator().manual_seed(args.seed)
     worker_count = args.workers
     train_loader = DataLoader(
@@ -377,16 +380,11 @@ def run(args: argparse.Namespace) -> None:
         weight_decay=float(optimizer["weight_decay"]),
     )
 
-    commit = _git_commit()
-    run_id = args.run_id or (
-        f"{args.method}_{args.env}_seed{args.seed}_"
-        f"{training['epochs']}ep_{commit[:8]}"
-    )
-    run_dir = run_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "run_id": run_id,
-        "git_commit": commit,
+        "experiment_fingerprint": experiment_fingerprint,
+        "git": repository_state,
+        "git_commit": repository_state["commit"],
         "stable_worldmodel_version": importlib.metadata.version(
             "stable-worldmodel"
         ),
@@ -397,9 +395,11 @@ def run(args: argparse.Namespace) -> None:
         "gpu": torch.cuda.get_device_name(0),
         "seed": args.seed,
         "dataset": str(dataset_path),
+        "dataset_signature": data_signature,
         "dataset_length": len(dataset),
         "train_length": train_length,
         "validation_length": validation_length,
+        "split": episode_split.as_dict(),
         "normalization": statistics,
         "environment_config": environment,
         "method_config": method,
@@ -444,6 +444,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--method", required=True)
     parser.add_argument("--seed", required=True, type=int)
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--dataset-sha256")
     parser.add_argument("--run-root", required=True)
     parser.add_argument("--run-id")
     parser.add_argument("--workers", type=int, default=6)

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[2]
 OFFLINE_METHODS = ("pldm", "dino_wm", "gcbc", "gcivl", "gciql")
 
@@ -98,3 +97,15 @@ def test_dino_snapshot_path_is_runtime_injected() -> None:
     )
     assert 'os.environ.get("TDWM_DINO_BACKBONE", "dinov2_small")' in source
     assert "/gemini/" not in source
+
+
+def test_baseline_exports_a_loadable_root_model_config() -> None:
+    source = (ROOT / "src/tdwm/training/baselines.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"_target_": "tdwm.training.baselines.build_baseline_model"' in source
+    assert "config=OmegaConf.create(self.model_config)" in source
+    pldm_source = source.split("class PLDMTrainingModule", maxsplit=1)[1].split(
+        "class PreJEPATrainingModule", maxsplit=1
+    )[0]
+    assert "target = embeddings[:, self.num_predictions :].detach()" not in pldm_source

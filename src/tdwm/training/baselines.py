@@ -17,19 +17,26 @@ from hydra.utils import instantiate
 from lightning.pytorch.loggers import CSVLogger
 from omegaconf import OmegaConf
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset
 
+from tdwm.training.data import (
+    column_statistics,
+    make_episode_split,
+    make_episode_view,
+)
+from tdwm.training.experiment import (
+    dataset_signature,
+    git_state,
+    prepare_run_directory,
+)
 from tdwm.training.lewm import (
     SequenceTransform,
-    _column_statistics,
-    _git_commit,
     _install_torchvision_v2_compatibility,
     _load_yaml,
     _repo_root,
     _verify_installed_platform,
     _write_json,
 )
-
 
 SUPPORTED_METHODS = frozenset({"pldm", "dino_wm", "gcbc", "gcivl", "gciql"})
 
@@ -55,6 +62,10 @@ class MappedDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         return self.transform(self.dataset[index])
 
+    @property
+    def clip_indices(self) -> Any:
+        return self.dataset.clip_indices
+
 
 class BaselineCheckpoint(pl.Callback):
     """Save resumable Lightning state and an upstream-compatible weight export."""
@@ -66,7 +77,7 @@ class BaselineCheckpoint(pl.Callback):
         run_root: Path,
         run_id: str,
         stage: str,
-        method_config: dict[str, Any],
+        model_config: dict[str, Any],
         every_n_steps: int,
     ) -> None:
         super().__init__()
@@ -74,7 +85,7 @@ class BaselineCheckpoint(pl.Callback):
         self.run_root = run_root
         self.run_id = run_id
         self.stage = stage
-        self.method_config = method_config
+        self.model_config = model_config
         self.every_n_steps = every_n_steps
 
     @property
@@ -110,7 +121,7 @@ class BaselineCheckpoint(pl.Callback):
         swm.wm.save_pretrained(
             pl_module.model,
             run_name=f"{self.run_id}_{self.stage}",
-            config=OmegaConf.create(self.method_config),
+            config=OmegaConf.create(self.model_config),
             filename=f"weights_epoch_{trainer.current_epoch + 1}.pt",
             cache_dir=str(self.run_root),
         )
@@ -201,7 +212,7 @@ class PLDMTrainingModule(OptimizedModule):
             embeddings[:, : self.history_size],
             actions[:, : self.history_size],
         )
-        target = embeddings[:, self.num_predictions :].detach()
+        target = embeddings[:, self.num_predictions :]
 
         losses = self.pldm_loss(embeddings)
         losses["prediction_loss"] = F.mse_loss(prediction, target)
@@ -539,7 +550,7 @@ def _make_loaders(
     method: dict[str, Any],
     *,
     goal_probabilities: tuple[float, float, float, float] | None = None,
-) -> tuple[Any, DataLoader, DataLoader, dict[str, Any], int]:
+) -> tuple[Any, DataLoader, DataLoader, dict[str, Any], int, dict[str, Any]]:
     sequence = method["sequence"]
     loader_config = environment["dataset"]["training_loader"]
     dataset = swm.data.load_dataset(
@@ -550,7 +561,15 @@ def _make_loaders(
         keys_to_cache=["action"],
         transform=None,
     )
-    statistics = _column_statistics(dataset, ["action"])
+    split_config = loader_config["split"]
+    episode_split = make_episode_split(
+        dataset.clip_indices,
+        train_fraction=float(split_config["train"]),
+        seed=int(split_config["seed"]),
+    )
+    statistics = column_statistics(
+        dataset, ["action"], episode_split.train_episodes
+    )
     effective_action_dimension = int(
         int(sequence["frameskip"]) * dataset.get_dim("action")
     )
@@ -558,28 +577,37 @@ def _make_loaders(
     if goal_probabilities is None:
         dataset.transform = SequenceTransform(statistics)
         transformed: Dataset = dataset
+        train_indices, validation_indices = episode_split.indices_for(
+            transformed.clip_indices
+        )
+        train_dataset = Subset(transformed, train_indices)
+        validation_dataset = Subset(transformed, validation_indices)
     else:
-        goal_dataset = swm.data.GoalDataset(
-            dataset=dataset,
-            goal_probabilities=goal_probabilities,
-            gamma=float(method.get("rl", {}).get("goal_gamma", 0.99)),
-            current_goal_offset=int(sequence["history_size"]),
-            goal_keys={"pixels": "goal_pixels"},
-            seed=args.seed,
-        )
-        transformed = MappedDataset(
-            goal_dataset, GoalSequenceTransform(statistics)
-        )
+        def goal_dataset_for(
+            episodes: tuple[int, ...], seed: int
+        ) -> MappedDataset:
+            episode_dataset = make_episode_view(dataset, episodes)
+            goal_dataset = swm.data.GoalDataset(
+                dataset=episode_dataset,
+                goal_probabilities=goal_probabilities,
+                gamma=float(method.get("rl", {}).get("goal_gamma", 0.99)),
+                current_goal_offset=int(sequence["history_size"]),
+                goal_keys={"pixels": "goal_pixels"},
+                seed=seed,
+            )
+            return MappedDataset(
+                goal_dataset,
+                GoalSequenceTransform(statistics),
+            )
 
-    split = loader_config["split"]
-    train_length = int(len(transformed) * float(split["train"]))
-    validation_length = len(transformed) - train_length
-    split_generator = torch.Generator().manual_seed(int(split["seed"]))
-    train_dataset, validation_dataset = random_split(
-        transformed,
-        [train_length, validation_length],
-        generator=split_generator,
-    )
+        train_dataset = goal_dataset_for(episode_split.train_episodes, args.seed)
+        validation_dataset = goal_dataset_for(
+            episode_split.validation_episodes,
+            args.seed + 1,
+        )
+        transformed = dataset
+    train_length = len(train_dataset)
+    validation_length = len(validation_dataset)
     loader_generator = torch.Generator().manual_seed(args.seed)
     worker_count = int(args.workers)
     batch_size = int(method["training"]["batch_size"])
@@ -613,14 +641,19 @@ def _make_loaders(
         validation_loader,
         statistics,
         effective_action_dimension,
+        episode_split.as_dict(),
     )
 
 
-def _build_dino_encoder() -> tuple[nn.Module, int]:
+def _build_dino_encoder(
+    backbone_source: str | None = None,
+) -> tuple[nn.Module, int]:
     import stable_pretraining as spt
     from stable_worldmodel.wm.prejepa.module import create_backbone
 
-    backbone_source = os.environ.get("TDWM_DINO_BACKBONE", "dinov2_small")
+    backbone_source = backbone_source or os.environ.get(
+        "TDWM_DINO_BACKBONE", "dinov2_small"
+    )
     encoder = create_backbone(backbone_source)
     embedding_dimension = int(encoder.config.hidden_size)
     encoder.requires_grad_(False)
@@ -628,11 +661,13 @@ def _build_dino_encoder() -> tuple[nn.Module, int]:
 
 
 def _build_prejepa(
-    method: dict[str, Any], effective_action_dimension: int
+    method: dict[str, Any],
+    effective_action_dimension: int,
+    backbone_source: str | None = None,
 ) -> tuple[nn.Module, int]:
     from stable_worldmodel.wm.prejepa.module import CausalPredictor, Embedder
 
-    encoder, pixel_dimension = _build_dino_encoder()
+    encoder, pixel_dimension = _build_dino_encoder(backbone_source)
     sequence = method["sequence"]
     predictor_config = method["model"]["predictor"]
     action_embedding_dimension = int(
@@ -664,12 +699,14 @@ def _build_prejepa(
 
 
 def _build_gcrl(
-    method: dict[str, Any], effective_action_dimension: int
+    method: dict[str, Any],
+    effective_action_dimension: int,
+    backbone_source: str | None = None,
 ) -> nn.Module:
     import stable_pretraining as spt
     from stable_worldmodel.wm.gcrl.module import Predictor, QPredictor
 
-    encoder, embedding_dimension = _build_dino_encoder()
+    encoder, embedding_dimension = _build_dino_encoder(backbone_source)
     sequence = method["sequence"]
     predictor_config = method["model"].get(
         "predictor", method["model"].get("action_predictor")
@@ -722,6 +759,49 @@ def _build_gcrl(
     )
 
 
+def build_baseline_model(
+    method_config: dict[str, Any],
+    effective_action_dimension: int,
+    backbone_source: str | None = None,
+) -> nn.Module:
+    """Build an exported baseline model from a self-contained public config."""
+    method_id = str(method_config["id"])
+    if method_id == "pldm":
+        model_config = deepcopy(method_config["factory"])
+        model_config["action_encoder"]["input_dim"] = int(
+            effective_action_dimension
+        )
+        return instantiate(model_config)
+    if method_id == "dino_wm":
+        model, _ = _build_prejepa(
+            method_config,
+            int(effective_action_dimension),
+            backbone_source,
+        )
+        return model
+    if method_id in {"gcbc", "gcivl", "gciql"}:
+        return _build_gcrl(
+            method_config,
+            int(effective_action_dimension),
+            backbone_source,
+        )
+    raise ValueError(f"Unsupported baseline model: {method_id}")
+
+
+def _export_model_config(
+    method: dict[str, Any],
+    effective_action_dimension: int,
+    backbone_source: str | None,
+) -> dict[str, Any]:
+    return {
+        "_target_": "tdwm.training.baselines.build_baseline_model",
+        "_recursive_": False,
+        "method_config": method,
+        "effective_action_dimension": int(effective_action_dimension),
+        "backbone_source": backbone_source,
+    }
+
+
 def _goal_probabilities(config: dict[str, Any]) -> tuple[float, float, float, float]:
     return (
         float(config["random"]),
@@ -749,6 +829,7 @@ def _fit_stage(
     train_loader: DataLoader,
     validation_loader: DataLoader,
     method: dict[str, Any],
+    model_config: dict[str, Any],
     run_dir: Path,
     run_root: Path,
     run_id: str,
@@ -763,7 +844,7 @@ def _fit_stage(
         run_root=run_root,
         run_id=run_id,
         stage=stage,
-        method_config=method,
+        model_config=model_config,
         every_n_steps=checkpoint_steps,
     )
     if resume and _checkpoint_is_complete(
@@ -805,10 +886,18 @@ def _write_metadata(
     dataset_info: dict[str, Any],
     statistics: dict[str, Any],
     effective_action_dimension: int,
+    experiment_fingerprint: str,
+    repository_state: dict[str, Any],
+    data_signature: dict[str, Any],
+    split: dict[str, Any],
+    model_config: dict[str, Any],
+    backbone_source: str | None,
 ) -> None:
     metadata = {
         "run_id": run_id,
-        "git_commit": _git_commit(),
+        "experiment_fingerprint": experiment_fingerprint,
+        "git": repository_state,
+        "git_commit": repository_state["commit"],
         "stable_worldmodel_version": importlib.metadata.version(
             "stable-worldmodel"
         ),
@@ -819,14 +908,15 @@ def _write_metadata(
         "gpu": torch.cuda.get_device_name(0),
         "seed": args.seed,
         "dataset": str(Path(args.dataset).expanduser().resolve()),
+        "dataset_signature": data_signature,
         **dataset_info,
+        "split": split,
         "normalization": statistics,
         "effective_action_dimension": effective_action_dimension,
-        "dino_backbone_source": os.environ.get(
-            "TDWM_DINO_BACKBONE", "dinov2_small"
-        ),
+        "dino_backbone_source": backbone_source,
         "environment_config": environment,
         "method_config": method,
+        "resolved_model_config": model_config,
     }
     _write_json(run_dir / "metadata.json", metadata)
 
@@ -862,7 +952,7 @@ def run(args: Any) -> None:
     pl.seed_everything(args.seed, workers=True)
 
     if args.method in {"pldm", "dino_wm"}:
-        dataset_info, train, validation, statistics, action_dimension = (
+        dataset_info, train, validation, statistics, action_dimension, split = (
             _make_loaders(args, environment, method)
         )
     else:
@@ -871,7 +961,7 @@ def run(args: Any) -> None:
             if args.method == "gcbc"
             else method["rl"]["value_goal_sampling"]
         )
-        dataset_info, train, validation, statistics, action_dimension = (
+        dataset_info, train, validation, statistics, action_dimension, split = (
             _make_loaders(
                 args,
                 environment,
@@ -880,13 +970,33 @@ def run(args: Any) -> None:
             )
         )
 
-    commit = _git_commit()
-    run_id = args.run_id or (
-        f"{args.method}_{args.env}_seed{args.seed}_"
-        f"{training['epochs']}ep_{commit[:8]}"
+    backbone_source = (
+        None
+        if args.method == "pldm"
+        else os.environ.get("TDWM_DINO_BACKBONE", "dinov2_small")
     )
-    run_dir = run_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    model_config = _export_model_config(
+        method, action_dimension, backbone_source
+    )
+    repository_state = git_state(root)
+    data_signature = dataset_signature(dataset_path, args.dataset_sha256)
+    identity = {
+        "git": repository_state,
+        "environment_config": environment,
+        "method_config": method,
+        "model_config": model_config,
+        "seed": args.seed,
+        "dataset": data_signature,
+        "split": split,
+    }
+    run_id, run_dir, experiment_fingerprint = prepare_run_directory(
+        run_root=run_root,
+        requested_run_id=args.run_id,
+        method=args.method,
+        environment=args.env,
+        seed=args.seed,
+        identity=identity,
+    )
     _write_metadata(
         args=args,
         run_dir=run_dir,
@@ -896,12 +1006,16 @@ def run(args: Any) -> None:
         dataset_info=dataset_info,
         statistics=statistics,
         effective_action_dimension=action_dimension,
+        experiment_fingerprint=experiment_fingerprint,
+        repository_state=repository_state,
+        data_signature=data_signature,
+        split=split,
+        model_config=model_config,
+        backbone_source=backbone_source,
     )
 
     if args.method == "pldm":
-        model_config = deepcopy(method["factory"])
-        model_config["action_encoder"]["input_dim"] = action_dimension
-        model = instantiate(model_config)
+        model = build_baseline_model(method, action_dimension)
         module: pl.LightningModule = PLDMTrainingModule(
             model,
             loss_config=method["loss"],
@@ -912,7 +1026,9 @@ def run(args: Any) -> None:
         )
         stages = [("train", module, train, validation)]
     elif args.method == "dino_wm":
-        model, pixel_dimension = _build_prejepa(method, action_dimension)
+        model, pixel_dimension = _build_prejepa(
+            method, action_dimension, backbone_source
+        )
         module = PreJEPATrainingModule(
             model,
             history_size=int(method["sequence"]["history_size"]),
@@ -923,7 +1039,7 @@ def run(args: Any) -> None:
         )
         stages = [("train", module, train, validation)]
     else:
-        model = _build_gcrl(method, action_dimension)
+        model = _build_gcrl(method, action_dimension, backbone_source)
         if args.method == "gcbc":
             module = GoalPolicyTrainingModule(
                 model,
@@ -963,6 +1079,7 @@ def run(args: Any) -> None:
             train_loader=stage_train,
             validation_loader=stage_validation,
             method=method,
+            model_config=model_config,
             run_dir=run_dir,
             run_root=run_root,
             run_id=run_id,
@@ -984,7 +1101,7 @@ def run(args: Any) -> None:
     gc.collect()
     torch.cuda.empty_cache()
     sampling = method["rl"]["actor_goal_sampling"]
-    _, actor_train, actor_validation, _, _ = _make_loaders(
+    _, actor_train, actor_validation, _, _, _ = _make_loaders(
         args,
         environment,
         method,
@@ -1008,6 +1125,7 @@ def run(args: Any) -> None:
         train_loader=actor_train,
         validation_loader=actor_validation,
         method=method,
+        model_config=model_config,
         run_dir=run_dir,
         run_root=run_root,
         run_id=run_id,
