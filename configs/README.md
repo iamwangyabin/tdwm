@@ -12,8 +12,8 @@ configs/
 训练时直接选择一个环境配置和一个方法配置进行组合。进入实际运行的单元必须在
 `experiment/` 中锁定数据、checkpoint、episode 选择、规划预算和成功定义；这类文件
 是运行协议，不是重复维护的实验矩阵。
-完整实验仍然是 4 个环境 × 7 个方法；默认使用训练种子 `0, 1, 2`。未来训练
-入口采用两个明确参数，例如 `--env pusht --method lewm --seed 0`。
+完整实验仍然是 4 个环境 × 7 个方法；LeWM Cube 复现锁定训练种子
+`0, 42, 3072`。
 
 ## 当前矩阵状态
 
@@ -39,8 +39,9 @@ reward-free、任意目标条件控制。没有先确定 goal-conditioned reward
 
 - 固定依赖：`stable-worldmodel[all]==0.1.1`；
 - 主结果使用相同离线数据、训练/验证划分、评测 episode、起点、目标偏移和预算；
-- 训练随机种子：`0, 1, 2`；
-- 数据按 episode 使用固定种子 42 划分，不能让不同方法重新随机划分；
+- LeWM Cube 训练随机种子：`0, 42, 3072`；
+- 原始 LeWM 训练按 sequence clip 使用每个训练 seed 做 90/10 随机划分，并保存
+  每次运行的确切索引；后续方法比较必须复用相应 seed 的索引；
 - 每次评测 50 条轨迹，目标偏移 25 个环境步，执行预算 50 个环境步；
 - world model 统一使用 CEM：300 candidates、30 elites、horizon 5、action block 5；
 - PushT 使用 30 次 CEM 迭代，其他环境使用 10 次；
@@ -97,5 +98,23 @@ python scripts/evaluate.py --smoke \
 
 入口通过 `import stable_worldmodel as swm` 使用 `0.1.1` 的公开 API，不复制上游
 baseline 源码。每次运行会先写入协议清单和确切的 episode/start/goal 索引，再开始
-规划；逐 episode success 和完整聚合结果写入 `results.json`。`scripts/train.py` 尚未
-实现，必须在官方 checkpoint 评测通过后再进入多 seed 重训。
+规划；逐 episode success 和完整聚合结果写入 `results.json`。
+
+官方 checkpoint 评测通过后，使用锁定的原始训练配置进行多 seed 重训。正式训练
+前必须先运行冒烟训练，再用 `--resume required` 验证 Lightning checkpoint 可以恢复：
+
+```bash
+python scripts/train.py --smoke --resume never --seed 0 \
+  --config configs/experiment/lewm_cube_train.yaml \
+  --dataset "$TDWM_CUBE_DATASET"
+python scripts/train.py --smoke --resume required --seed 0 \
+  --config configs/experiment/lewm_cube_train.yaml \
+  --dataset "$TDWM_CUBE_DATASET"
+python scripts/train.py --seed 0 \
+  --config configs/experiment/lewm_cube_train.yaml \
+  --dataset "$TDWM_CUBE_DATASET"
+```
+
+训练运行会保存协议与运行时清单、确切 split 索引、每 epoch 的 Lightning checkpoint
+和 Stable World Model 可加载的导出权重。数据、checkpoint 和原始日志只保存在运行
+目录，不进入 Git。

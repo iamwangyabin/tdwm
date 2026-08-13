@@ -25,8 +25,8 @@ dataset:
     keys_to_merge:
       proprio: observation
     split:
-      unit: episode
-      seed: 42
+      unit: sequence_clip
+      seed: training_seed
       train: 0.9
       validation: 0.1
   evaluation_loader:

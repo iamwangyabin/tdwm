@@ -1,0 +1,101 @@
+schema_version: 1
+id: lewm_cube_reproduction
+method: lewm
+environment: cube
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+
+seeds: [0, 42, 3072]
+
+dataset:
+  identifier: quentinll/lewm-cube
+  file: ogbench/cube_single_expert.h5
+  expected_size_bytes: 101942558720
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  keys_to_load: [pixels, action, observation]
+  keys_to_cache: [action, observation]
+  keys_to_merge:
+    proprio: observation
+
+split:
+  unit: sequence_clip
+  implementation: torch.utils.data.random_split
+  train_fraction: 0.9
+  validation_fraction: 0.1
+  seed_source: training_seed
+  exact_indices_artifact: split_indices.npz
+  note: This reproduces the released trainer's clip-level split; each seed has its own deterministic split.
+
+sequence:
+  frame_skip: 5
+  history_frames: 3
+  prediction_frames: 1
+  num_steps: 4
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+normalization:
+  fit_population: complete_dataset
+  columns: [action, observation]
+  boundary_nan_policy: preserve_during_preprocessing_then_zero_actions_before_forward
+
+model:
+  parameters: 18034628
+  encoder_size: tiny
+  patch_size: 14
+  embed_dim: 192
+  predictor_depth: 6
+  predictor_heads: 16
+  predictor_mlp_dim: 2048
+  predictor_dim_head: 64
+  predictor_dropout: 0.1
+  predictor_embedding_dropout: 0.0
+  projector_hidden_dim: 2048
+
+loss:
+  prediction: mse
+  sigreg:
+    weight: 0.09
+    knots: 17
+    num_projections: 1024
+
+loader:
+  batch_size: 128
+  workers: 6
+  prefetch_factor: 3
+  train_shuffle: true
+  train_drop_last: true
+  validation_shuffle: false
+  validation_drop_last: false
+  pin_memory: true
+
+optimizer:
+  type: AdamW
+  learning_rate: 0.00005
+  weight_decay: 0.001
+
+scheduler:
+  type: linear_warmup_cosine_annealing
+  interval: optimizer_step
+  warmup_fraction: 0.01
+
+training:
+  epochs: 10
+  scheduler_epochs: 10
+  precision: bf16-mixed
+  gradient_clip_norm: 1.0
+  checkpoint_every_epochs: 1
+  resume: true
+
+provenance:
+  released_training_entry: https://github.com/galilai-group/stable-worldmodel/blob/main/scripts/train/lewm.py
+  released_training_config: https://github.com/galilai-group/stable-worldmodel/blob/main/scripts/train/config/lewm.yaml
+  released_cube_data_config: https://github.com/galilai-group/stable-worldmodel/blob/main/scripts/train/config/data/ogb.yaml
+  epoch_decision: The released general config says 100 epochs; this locked reproduction uses the paper's 10-epoch four-environment protocol and gives the scheduler the same 10-epoch horizon.
