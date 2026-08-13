@@ -118,3 +118,17 @@ python scripts/train.py --seed 0 \
 训练运行会保存协议与运行时清单、确切 split 索引、每 epoch 的 Lightning checkpoint
 和 Stable World Model 可加载的导出权重。数据、checkpoint 和原始日志只保存在运行
 目录，不进入 Git。
+
+Cube 原始 HDF5 的 pixels 每 100 帧压缩为一个 chunk，在远程 FUSE 挂载上进行随机
+clip 训练会产生严重读取放大。可以在本地使用无损重排入口把 pixels 改为每帧一个
+chunk；它保留全部列、episode 边界、dtype 和像素值，不使用会重新编码图片的 Lance：
+
+```bash
+python scripts/rechunk_cube_hdf5.py \
+  data/lewm-cube/cube_single_expert.h5 \
+  data/lewm-cube/cube_single_expert_chunk1.h5
+```
+
+转换完成后会逐列抽样校验并生成相邻的 manifest。优化布局的确切大小和 SHA-256
+锁定在 `experiment/lewm_cube_train.yaml`；上传到云平台后必须先核对这两项，再用于
+正式重训。该布局只改变无损存储分块，不改变训练数据或实验协议。

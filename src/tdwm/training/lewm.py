@@ -353,9 +353,16 @@ def train_lewm(
     dataset_path = Path(dataset_path).expanduser().resolve()
     if not dataset_path.is_file():
         raise FileNotFoundError(f"Cube dataset not found: {dataset_path}")
-    expected_size = protocol["dataset"].get("expected_size_bytes")
-    if expected_size and dataset_path.stat().st_size != expected_size:
-        raise ValueError("Cube dataset size does not match the locked protocol.")
+    actual_size = dataset_path.stat().st_size
+    expected_sizes = protocol["dataset"].get(
+        "accepted_size_bytes",
+        [protocol["dataset"].get("expected_size_bytes")],
+    )
+    if actual_size not in expected_sizes:
+        raise ValueError(
+            f"Cube dataset size {actual_size} is not one of the locked layouts "
+            f"{expected_sizes}."
+        )
 
     output_dir = Path(output_dir).expanduser().resolve()
     run_dir = output_dir / (f"seed_{seed}_smoke" if smoke else f"seed_{seed}")
@@ -519,7 +526,7 @@ def train_lewm(
         "smoke": smoke,
         "dataset": {
             "path": str(dataset_path),
-            "size_bytes": dataset_path.stat().st_size,
+            "size_bytes": actual_size,
             "episodes": actual_episodes,
             "transitions": actual_transitions,
             "sequence_samples": len(dataset),
