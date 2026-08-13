@@ -1,14 +1,17 @@
 # 四环境复现配置
 
-配置只保留两类：
+配置分为环境、方法和锁定的实验协议：
 
 ```text
 configs/
 ├── envs/            # 每个环境的环境、数据和评测配置
-└── methods/         # 每个方法的模型和训练配置
+├── methods/         # 每个方法的模型和训练配置
+└── experiment/      # 已锁定、可直接执行和审计的实验协议
 ```
 
-训练时直接选择一个环境配置和一个方法配置进行组合，不再维护额外的矩阵文件。
+训练时直接选择一个环境配置和一个方法配置进行组合。进入实际运行的单元必须在
+`experiment/` 中锁定数据、checkpoint、episode 选择、规划预算和成功定义；这类文件
+是运行协议，不是重复维护的实验矩阵。
 完整实验仍然是 4 个环境 × 7 个方法；默认使用训练种子 `0, 1, 2`。未来训练
 入口采用两个明确参数，例如 `--env pusht --method lewm --seed 0`。
 
@@ -70,7 +73,29 @@ data/lewm-pusht/pusht_expert_train.h5.zst
 
 ## 执行边界
 
-这些文件现在是实验配置的唯一事实来源。项目尚未实现 `scripts/train.py` 和
-`scripts/evaluate.py`，因此本次只建立配置与协议，不声称训练命令已经可用。后续
-训练入口必须通过 `import stable_worldmodel as swm` 使用 `0.1.1` 的公开 API，
-并读取这些配置进行组合，不能复制上游训练脚本。
+环境、方法配置与 `experiment/` 下的锁定协议是实验事实来源。当前已实现官方 LeWM
+checkpoint 的 Cube O25 评测入口：
+
+```bash
+export STABLEWM_HOME=/path/to/persistent/stable_worldmodel
+export TDWM_CUBE_DATASET=/path/to/ogbench/cube_single_expert.h5
+python -m pip install --no-deps -e .
+python scripts/evaluate.py \
+  --config configs/experiment/lewm_cube_checkpoint_o25.yaml \
+  --output-dir outputs/lewm_cube_official_checkpoint_o25
+```
+
+正式评测前使用相同输出目录运行一次 `--smoke`。冒烟运行只执行 1 条 episode、8 个
+候选和 1 次 CEM 迭代，并缓存从完整数据计算的 action normalization；随后的正式运行
+会复用该统计量并以锁定协议覆盖冒烟清单和结果：
+
+```bash
+python scripts/evaluate.py --smoke \
+  --config configs/experiment/lewm_cube_checkpoint_o25.yaml \
+  --output-dir outputs/lewm_cube_official_checkpoint_o25
+```
+
+入口通过 `import stable_worldmodel as swm` 使用 `0.1.1` 的公开 API，不复制上游
+baseline 源码。每次运行会先写入协议清单和确切的 episode/start/goal 索引，再开始
+规划；逐 episode success 和完整聚合结果写入 `results.json`。`scripts/train.py` 尚未
+实现，必须在官方 checkpoint 评测通过后再进入多 seed 重训。
