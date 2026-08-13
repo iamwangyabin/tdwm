@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="TDWM 四环境世界模型研究任务、评测流程与方法取舍的交互式说明。">
+  <title>TDWM 研究任务全景</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="返回顶部">
+      <span class="brand-mark">TD</span>
+      <span>World Model Lab</span>
+    </a>
+    <button class="menu-button" type="button" aria-label="打开目录" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <nav class="nav" aria-label="页面目录">
+      <a href="#overview">任务</a>
+      <a href="#pipeline">流程</a>
+      <a href="#environments">环境</a>
+      <a href="#evaluation">评测</a>
+      <a href="#methods">方法</a>
+      <a href="#research">研究路线</a>
+      <a href="#status">现状</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="overview">
+      <div class="hero-backdrop" aria-hidden="true">
+        <img src="assets/pusht.gif" alt="">
+        <img src="assets/tworoom.gif" alt="">
+        <img src="assets/reacher.gif" alt="">
+        <img src="assets/cube.gif" alt="">
+      </div>
+      <div class="hero-overlay"></div>
+      <div class="hero-content">
+        <p class="eyebrow">TDWM RESEARCH BRIEF</p>
+        <h1>让世界模型不只会预测，<br>还真正有利于规划</h1>
+        <p class="hero-copy">我们研究的是一个很具体的问题：从离线视觉轨迹学到的 latent world model，能否既保留通用、任意动作的短期动力学，又学会长期可达性和任务相关结构，从而在真实模拟环境里做出更好的动作选择。</p>
+        <div class="hero-actions">
+          <a class="primary-action" href="#pipeline">看懂一次完整评测</a>
+          <a class="secondary-action" href="#methods">比较三条方法路线</a>
+        </div>
+      </div>
+      <div class="hero-facts" aria-label="研究概览">
+        <div><strong>4</strong><span>种环境</span></div>
+        <div><strong>3</strong><span>条核心路线</span></div>
+        <div><strong>12</strong><span>个核心训练单元</span></div>
+        <div><strong>50</strong><span>条轨迹 / 次评测</span></div>
+      </div>
+    </section>
+
+    <section class="band thesis-band">
+      <div class="section-inner split-intro">
+        <div>
+          <p class="eyebrow dark">一句话抓住任务</p>
+          <h2>模型在脑中想象，环境在现实中裁判。</h2>
+        </div>
+        <div class="lead-stack">
+          <p>数据集不是一部必须照着播放的录像。它提供训练经验，也可以提供固定、可复现的起点和目标。评测开始后，智能体仍然可以自由行动。</p>
+          <p>世界模型只负责预测候选动作可能造成的未来；Pymunk、MuJoCo 或二维碰撞环境真正执行动作，并决定成功还是失败。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="pipeline">
+      <div class="section-inner">
+        <div class="section-heading">
+          <p class="eyebrow dark">THE FULL LOOP</p>
+          <h2>一条轨迹怎样从数据变成决策</h2>
+          <p>点击步骤，看看每个组件负责什么。训练与评测共用同一种观测和动作语义，但评测不会照抄示范动作。</p>
+        </div>
+        <div class="pipeline-layout">
+          <div class="pipeline-steps" role="tablist" aria-label="完整流程">
+            <button class="pipeline-step active" type="button" role="tab" aria-selected="true" data-step="0">
+              <span>01</span><b>离线轨迹</b><small>图像、动作、状态序列</small>
+            </button>
+            <button class="pipeline-step" type="button" role="tab" aria-selected="false" data-step="1">
+              <span>02</span><b>训练模型</b><small>学动作条件下的未来</small>
+            </button>
+            <button class="pipeline-step" type="button" role="tab" aria-selected="false" data-step="2">
+              <span>03</span><b>固定考题</b><small>恢复起点，指定目标</small>
+            </button>
+            <button class="pipeline-step" type="button" role="tab" aria-selected="false" data-step="3">
+              <span>04</span><b>模型想象</b><small>预测多组候选动作</small>
+            </button>
+            <button class="pipeline-step" type="button" role="tab" aria-selected="false" data-step="4">
+              <span>05</span><b>真实执行</b><small>环境推进一步并重规划</small>
+            </button>
+            <button class="pipeline-step" type="button" role="tab" aria-selected="false" data-step="5">
+              <span>06</span><b>统计结果</b><small>成功率与逐局证据</small>
+            </button>
+          </div>
+          <div class="pipeline-stage" aria-live="polite">
+            <div class="stage-visual" data-stage-visual="dataset">
+              <div class="filmstrip">
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+              <div class="stage-axis"><i></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="stage-copy">
+              <p class="stage-kicker">当前步骤 <span id="step-number">01 / 06</span></p>
+              <h3 id="step-title">离线数据记录发生过什么</h3>
+              <p id="step-description">每条 episode 保存连续图像、执行动作以及用于恢复环境的状态。它只覆盖专家或采集策略走过的有限轨迹，并不穷举所有可能状态。</p>
+              <div class="stage-note" id="step-note"><strong>关键：</strong>数据是经验样本，不是游戏世界本身。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section environment-section" id="environments">
+      <div class="section-inner">
+        <div class="section-heading light">
+          <p class="eyebrow">FOUR REAL SIMULATORS</p>
+          <h2>四种环境，四类规划难题</h2>
+          <p>同一方法必须跨越导航、接触、连续控制和机器人操作，才不容易只对某一种物理结构过拟合。</p>
+        </div>
+        <div class="environment-tabs" role="tablist" aria-label="环境选择">
+          <button type="button" class="active" data-env="tworoom" role="tab" aria-selected="true">TwoRoom</button>
+          <button type="button" data-env="reacher" role="tab" aria-selected="false">Reacher</button>
+          <button type="button" data-env="pusht" role="tab" aria-selected="false">PushT</button>
+          <button type="button" data-env="cube" role="tab" aria-selected="false">OGBench-Cube</button>
+        </div>
+        <div class="environment-view">
+          <div class="environment-media">
+            <img id="env-image" src="assets/tworoom.gif" alt="TwoRoom 环境运行画面">
+            <div class="media-caption"><span id="env-engine">Torch 二维碰撞</span><span id="env-id">swm/TwoRoom-v1</span></div>
+          </div>
+          <div class="environment-copy">
+            <p class="env-index" id="env-index">01 / 04</p>
+            <h3 id="env-title">穿过门，而不是撞向墙</h3>
+            <p id="env-description">圆形智能体从一个房间出发，到另一个房间的目标点。直线距离看起来很近，但真正可行的路线必须穿过门洞。</p>
+            <dl class="env-specs">
+              <div><dt>动作</dt><dd id="env-action">二维速度方向</dd></div>
+              <div><dt>成功</dt><dd id="env-success">距离目标小于 16 像素</dd></div>
+              <div><dt>它检验什么</dt><dd id="env-test">拓扑、绕障与长期可达性</dd></div>
+              <div><dt>主要风险</dt><dd id="env-risk">latent 距离近，不代表穿墙可达</dd></div>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="evaluation">
+      <div class="section-inner">
+        <div class="section-heading">
+          <p class="eyebrow dark">FAIR EVALUATION</p>
+          <h2>为什么“固定数据”仍然是在自由玩游戏</h2>
+          <p>评测数据只固定试题，不固定答案。下面可以切换两种评测模式。官方说明：<a class="inline-source" href="https://galilai-group.github.io/stable-worldmodel/quick_start/" target="_blank" rel="noreferrer">Evaluation guide</a>。</p>
+        </div>
+        <div class="mode-switch" role="group" aria-label="评测模式">
+          <button type="button" class="active" data-mode="dataset">固定考题</button>
+          <button type="button" data-mode="random">随机开局</button>
+        </div>
+        <div class="evaluation-layout">
+          <div class="evaluation-demo">
+            <div class="demo-toolbar">
+              <span>Episode 07</span>
+              <span id="demo-mode-label">Dataset-driven</span>
+            </div>
+            <div class="demo-track">
+              <div class="track-room left-room"></div>
+              <div class="track-room right-room"></div>
+              <div class="track-wall"></div>
+              <div class="track-door"></div>
+              <div class="track-start">S</div>
+              <div class="track-goal">G</div>
+              <svg viewBox="0 0 640 260" preserveAspectRatio="none" aria-label="一条允许自由选择的规划轨迹">
+                <path id="demo-path" d="M90,185 C190,220 240,205 310,132 C380,62 475,72 560,92"></path>
+              </svg>
+            </div>
+            <div class="demo-footer"><span>起点：数据轨迹第 10 步</span><span>目标：第 35 步状态</span><span>预算：50 步</span></div>
+          </div>
+          <div class="evaluation-copy">
+            <h3 id="mode-title">固定的是起点和目标，不是路线</h3>
+            <p id="mode-copy">从一条已经完成的轨迹中取出起点 S 和稍后的目标 G，因此知道任务可达。模型可以走原路线、捷径或完全不同的路线；物理环境只看它最终是否达到 G。</p>
+            <div class="truth-grid">
+              <div><b>数据集</b><span>给出可复现的 S 与 G</span></div>
+              <div><b>世界模型</b><span>在 latent 中想象候选未来</span></div>
+              <div><b>规划器</b><span>从候选动作中选最优</span></div>
+              <div><b>真实环境</b><span>执行动作并判定成功</span></div>
+            </div>
+            <p class="caution">不能只让世界模型自己给自己打分。最终成功必须来自真实模拟器的状态和成功条件。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section method-section" id="methods">
+      <div class="section-inner">
+        <div class="section-heading">
+          <p class="eyebrow dark">METHOD TRADE-OFFS</p>
+          <h2>三条核心路线到底在改什么</h2>
+          <p>它们不只是三个模型名字，而是对“什么样的 latent 才对控制有用”的三种不同回答。</p>
+        </div>
+        <div class="method-picker" role="tablist" aria-label="方法比较">
+          <button type="button" class="active" data-method="lewm" role="tab" aria-selected="true"><span>A</span>LeWM 原论文</button>
+          <button type="button" data-method="rcaux" role="tab" aria-selected="false"><span>B</span>RC-aux</button>
+          <button type="button" data-method="tdjepa" role="tab" aria-selected="false"><span>C</span>TD-JEPA</button>
+        </div>
+        <div class="method-detail">
+          <div class="method-core">
+            <p class="method-family" id="method-family">局部、动作条件世界模型</p>
+            <h3 id="method-title">LeWM：先学会预测下一段 latent</h3>
+            <p id="method-summary">从像素编码当前状态，根据任意候选动作预测未来 latent，再用 latent 距离作为目标代价，让 CEM 搜索动作序列。</p>
+            <div class="method-flow" id="method-flow" aria-label="LeWM 数据流">
+              <span>图像</span><i>→</i><span>Encoder</span><i>→</i><span>Latent</span><i>+</i><span>Action</span><i>→</i><span>Predictor</span><i>→</i><span>未来 latent</span>
+            </div>
+          </div>
+          <div class="pros-cons">
+            <div class="pros">
+              <h4>优势</h4>
+              <ul id="method-pros">
+                <li>reward-free，训练数据无需任务奖励</li>
+                <li>能比较任意候选 primitive action</li>
+                <li>结构简单，适合做干净、可审计的基线</li>
+              </ul>
+            </div>
+            <div class="cons">
+              <h4>局限</h4>
+              <ul id="method-cons">
+                <li>一步预测准，不保证多步规划准</li>
+                <li>latent L2 可能不等于真实可达距离</li>
+                <li>开放环滚动会累积误差</li>
+              </ul>
+            </div>
+          </div>
+          <div class="method-verdict">
+            <span>最适合作为</span>
+            <strong id="method-verdict">所有增强方法都必须打败的公平底座</strong>
+          </div>
+        </div>
+
+        <div class="comparison-wrap">
+          <h3>放到同一把尺子上</h3>
+          <div class="comparison-table" role="table" aria-label="方法特性比较">
+            <div class="comparison-row header" role="row">
+              <div role="columnheader">维度</div><div role="columnheader">LeWM</div><div role="columnheader">RC-aux</div><div role="columnheader">TD-JEPA</div>
+            </div>
+            <div class="comparison-row" role="row"><div role="cell">任意动作短期预测</div><div role="cell">强</div><div role="cell">强</div><div role="cell">非核心</div></div>
+            <div class="comparison-row" role="row"><div role="cell">长期可达结构</div><div role="cell">弱</div><div role="cell">中到强</div><div role="cell">强</div></div>
+            <div class="comparison-row" role="row"><div role="cell">奖励依赖</div><div role="cell">无</div><div role="cell">无</div><div role="cell">可做无奖励</div></div>
+            <div class="comparison-row" role="row"><div role="cell">典型部署</div><div role="cell">MPC / CEM</div><div role="cell">MPC + reachability</div><div role="cell">zero-shot policy</div></div>
+            <div class="comparison-row" role="row"><div role="cell">最大风险</div><div role="cell">几何不可规划</div><div role="cell">示范步数偏差</div><div role="cell">丢失反事实动力学</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section research-section" id="research">
+      <div class="section-inner">
+        <div class="section-heading light">
+          <p class="eyebrow">WHAT CAN TDWM CONTRIBUTE?</p>
+          <h2>我们讨论过的研究思路，应该怎样收窄</h2>
+          <p>宽泛地说“用 RL 帮助世界模型”不够新，也不可证伪。更可信的研究问题要明确梯度进哪里、保留什么能力、怎样排除替代解释。</p>
+        </div>
+        <div class="research-grid">
+          <article class="research-card recommended">
+            <div class="research-number">01</div>
+            <h3>冻结 LeWM，先做长期诊断头</h3>
+            <p>在不改变底座的情况下学习多 horizon、successor 或 occupancy 预测，检验长期信息是否真的补充了 LeWM。</p>
+            <dl><div><dt>优点</dt><dd>因果归因最干净；实现风险低</dd></div><div><dt>缺点</dt><dd>可能只证明下游头有效，没改善 latent</dd></div></dl>
+            <span class="route-label">建议第一步</span>
+          </article>
+          <article class="research-card">
+            <div class="research-number">02</div>
+            <h3>局部动力学 + 长期 occupancy 双层模型</h3>
+            <p>LeWM 保留任意 primitive action 的局部反事实预测，长期分支学习 policy-conditioned future occupancy，并约束两者一致。</p>
+            <dl><div><dt>优点</dt><dd>最接近仍有空间的科学问题</dd></div><div><dt>缺点</dt><dd>接口、训练稳定性和公平匹配更复杂</dd></div></dl>
+            <span class="route-label">潜在主线</span>
+          </article>
+          <article class="research-card">
+            <div class="research-number">03</div>
+            <h3>决策相关损失进入 latent</h3>
+            <p>用 value、TD、VAML、bisimulation 或 successor 信号改变表示几何，直接追求“对决策更有用”的 latent。</p>
+            <dl><div><dt>优点</dt><dd>可能直接提升规划和长时信用分配</dd></div><div><dt>缺点</dt><dd>容易任务化，损害 reward-free 复用</dd></div></dl>
+            <span class="route-label">高风险路线</span>
+          </article>
+          <article class="research-card">
+            <div class="research-number">04</div>
+            <h3>只改 planner，不动 world model</h3>
+            <p>在冻结模型上增加 terminal value、层级 subgoal、temporal cost 或 uncertainty-aware 规划。</p>
+            <dl><div><dt>优点</dt><dd>工程收益快；不会破坏预测模型</dd></div><div><dt>缺点</dt><dd>不能声称“世界模型学得更好”</dd></div></dl>
+            <span class="route-label">必要对照</span>
+          </article>
+        </div>
+        <div class="claim-filter">
+          <div>
+            <p class="eyebrow">CLAIM FILTER</p>
+            <h3>什么证据才能支持“RL 改善了 LeWM”？</h3>
+          </div>
+          <ol>
+            <li><b>预测没有变差：</b>一步、多步与 OOD rollout 都要报告。</li>
+            <li><b>规划确实变好：</b>同数据、同 CEM 预算、同起点目标和多 seed。</li>
+            <li><b>不是只会当前奖励：</b>冻结迁移到新目标或新奖励仍应保留价值。</li>
+            <li><b>排除简单解释：</b>对比冻结头、普通多步 loss、RC-aux、planner-only 等量基线。</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="status">
+      <div class="section-inner">
+        <div class="section-heading">
+          <p class="eyebrow dark">CURRENT PROJECT REALITY</p>
+          <h2>数据齐了多少，实验离“能跑”还有多远</h2>
+          <p>这里区分数据存在、代码入口存在、模型实现完成和最终复现完成，避免把“文件下载好了”误写成“实验完成”。</p>
+        </div>
+        <div class="status-board">
+          <div class="status-summary">
+            <div><strong>4 / 4</strong><span>训练数据文件已在本地</span></div>
+            <div><strong>1 / 3</strong><span>核心方法已有项目配置</span></div>
+            <div><strong>1</strong><span>Reacher 独立评测文件待核实</span></div>
+          </div>
+          <div class="status-matrix" role="table" aria-label="当前实验准备状态">
+            <div class="status-row header" role="row"><div>环境</div><div>训练数据</div><div>LeWM</div><div>RC-aux</div><div>TD-JEPA</div></div>
+            <div class="status-row" role="row"><div>TwoRoom</div><div><span class="dot ready"></span>已有</div><div><span class="dot partial"></span>配置 / 入口</div><div><span class="dot missing"></span>待实现</div><div><span class="dot missing"></span>待实现</div></div>
+            <div class="status-row" role="row"><div>Reacher</div><div><span class="dot partial"></span>训练集已有</div><div><span class="dot partial"></span>评测集待核</div><div><span class="dot missing"></span>待实现</div><div><span class="dot missing"></span>待实现</div></div>
+            <div class="status-row" role="row"><div>PushT</div><div><span class="dot ready"></span>已有</div><div><span class="dot partial"></span>配置 / 入口</div><div><span class="dot missing"></span>待实现</div><div><span class="dot missing"></span>待实现</div></div>
+            <div class="status-row" role="row"><div>OGBench-Cube</div><div><span class="dot ready"></span>已有</div><div><span class="dot partial"></span>首条协议已建</div><div><span class="dot missing"></span>待实现</div><div><span class="dot missing"></span>待实现</div></div>
+          </div>
+          <p class="status-footnote">状态基于当前仓库与本地数据布局。所谓“能跑”至少还包括依赖环境、checkpoint、训练 smoke test、恢复测试和真实模拟评测全部通过。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section experiment-section">
+      <div class="section-inner">
+        <div class="section-heading">
+          <p class="eyebrow dark">FAIR EXPERIMENT DESIGN</p>
+          <h2>一场可信的对比实验必须锁住什么</h2>
+        </div>
+        <div class="protocol-grid">
+          <div><span>01</span><h3>同一数据</h3><p>相同 episode 划分、图像预处理、frame skip 和训练预算。</p></div>
+          <div><span>02</span><h3>同一规划器</h3><p>相同 CEM candidates、horizon、迭代次数和重规划周期。</p></div>
+          <div><span>03</span><h3>同一考题</h3><p>相同起点、目标、goal offset、执行预算和随机种子。</p></div>
+          <div><span>04</span><h3>同一报告</h3><p>成功率之外保留逐 episode 结果、预测质量、时间和显存。</p></div>
+        </div>
+        <div class="protocol-strip">
+          <span>训练种子：0 / 1 / 2</span>
+          <span>评测：50 episodes</span>
+          <span>目标偏移：25 steps</span>
+          <span>执行预算：50 steps</span>
+          <span>CEM：300 candidates / 30 elites</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing">
+      <div class="section-inner">
+        <p class="eyebrow">THE RESEARCH QUESTION</p>
+        <h2>能否同时保住短期反事实动力学，<br>又学到真正支持长期决策的结构？</h2>
+        <p>如果只提升成功率却损害通用预测，结论应是“模型被任务化了”；如果长期结构、预测质量、跨目标迁移和公平控制评测同时改善，才有资格说我们得到了更好的世界模型。</p>
+        <a href="#overview">回到顶部</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>TDWM Research Explainer</span>
+    <span>基于 stable-worldmodel 0.1.1 的当前研究协议</span>
+  </footer>
+  <script src="script.js"></script>
+</body>
+</html>
