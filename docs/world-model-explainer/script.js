@@ -122,6 +122,81 @@ const methodContent = {
   }
 };
 
+const landscapeContent = {
+  jepa: {
+    index: "路线 01 / 08",
+    title: "从像素预测未来表示，而不是重建整张图",
+    summary: "DINO-WM、PLDM 与 LeWM 证明：不依赖 pixel decoder，也能从图像学习用于 MPC 的动作条件 latent dynamics。LeWM 再用 SIGReg 对抗表示坍塌。",
+    papers: ["DINO-WM", "PLDM", "LeJEPA", "LeWM", "SIGReg"],
+    covered: "reward-free、pixels-only、任意动作条件的局部 latent rollout。",
+    gap: "非坍塌和一步预测准确，并不保证 latent 距离适合长期规划。",
+    constraint: "不能把“decoder-free”或“加 anti-collapse”本身当作创新。"
+  },
+  lewm_neighbors: {
+    index: "路线 02 / 08",
+    title: "直接修正 LeWM 的表示、rollout、cost 与层级",
+    summary: "这条路线最危险，因为它们和我们的起点几乎相同：保留或冻结 LeWM，再对 temporal geometry、多 horizon、物理 grounding、测试时适配或层级规划动手。",
+    papers: ["Value-Guided JEPA", "Temporal Straightening", "RC-aux", "Fast-LeWM", "AdaJEPA", "Hi-LeWM", "Temporal-Distance", "TC-LeWM", "PhyLatent", "PSG-JEPA", "SD-JEPA"],
+    covered: "多步 rollout、reachability、temporal distance、层级 subgoal、物理 grounding 和测试时适配。",
+    gap: "还没有证明长期 operator 能在不损害任意动作反事实的前提下提供独立信息。",
+    constraint: "新方法必须超出普通 multi-horizon、reachability head 和 planner enhancement。"
+  },
+  successor: {
+    index: "路线 03 / 08",
+    title: "把很远的未来压成可递归学习的 operator",
+    summary: "Successor representation、gamma-model、TD-Flow、TD-JEPA、UHM 和 Jumpy WM 用 TD 或跨尺度递归绕过长 rollout，学习 policy-conditioned future occupancy 或任意 horizon 结果。",
+    papers: ["Successor Representation", "gamma-model", "TD-Flow", "TD-JEPA", "UHM", "Jumpy World Models", "RLDP", "FB / One-step FB"],
+    covered: "长期 future、occupancy、zero-shot reward transfer 与跨 horizon consistency。",
+    gap: "它们通常绑定 policy，未自动保留 LeWM 对任意 primitive action sequence 的反事实预测。",
+    constraint: "若只加 TD 长期 target，很容易成为已有方法的像素版或缩小版。"
+  },
+  decision: {
+    index: "路线 04 / 08",
+    title: "不要求模型处处准确，只要求对决策误差敏感",
+    summary: "VAML、PAML、VaGraM、TOM 与 Value Equivalence 用 value、policy gradient 或 occupancy 加权模型误差，明确区分 prediction objective 和 decision objective。",
+    papers: ["VAML", "Iterative VAML", "PAML", "VaGraM", "TOM", "Value Equivalence", "Calibrated VAML"],
+    covered: "value-aware、policy-aware 和 occupancy-aware dynamics learning 的理论与算法框架。",
+    gap: "决策充分的表示可能删除换奖励后仍重要的物理信息。",
+    constraint: "必须证明收益不只是 task-specific value geometry，并做 reward replacement。"
+  },
+  dreamer: {
+    index: "路线 05 / 08",
+    title: "在学到的世界里训练 actor，而不是只做 MPC",
+    summary: "World Models、PlaNet、Dreamer、MBPO、SimPLe、IRIS、TD-MPC 等建立了完整想象训练谱系；DreamerPro、MuDreamer 与 R2-Dreamer进一步探索无解码器或表征正则。",
+    papers: ["World Models", "PlaNet", "Dreamer 1-4", "MBPO", "SimPLe", "IRIS", "TD-MPC", "DreamerPro", "MuDreamer", "R2-Dreamer"],
+    covered: "在 learned dynamics 中做 policy/value learning，以及大量 RL + representation 组合。",
+    gap: "policy 使用模型获得收益，不等于 RL 梯度改善了 world model 本身。",
+    constraint: "direct policy 与 MPC 必须分榜；不能用 actor 提升冒充模型提升。"
+  },
+  action: {
+    index: "路线 06 / 08",
+    title: "让世界模型同时预测未来和生成动作",
+    summary: "DreamZero、LaWAM、VPP 与 latent-action world models 把 future representation、latent subgoal、action chunk 或 inverse dynamics 接进机器人策略。",
+    papers: ["DreamZero", "LaWAM", "VPP", "Latent Action WM", "World Action Model", "VLA-MBPO"],
+    covered: "future-to-action、latent action、action chunk 和 mixed-embodiment policy learning。",
+    gap: "高层动作接口可能丢掉 primitive action 反事实，且 support gap 会让 subgoal 不可执行。",
+    constraint: "一旦加入 actor 或 latent action，就必须与这些方法比较，不能只对比 TD-JEPA。"
+  },
+  adapt: {
+    index: "路线 07 / 08",
+    title: "环境变了以后，模型怎样发现并修正自己",
+    summary: "PETS、Plan2Explore、ReDRAW、AdaJEPA 以及 ensemble/pessimistic MBRL 研究覆盖、不确定性、主动采样、residual dynamics 和测试时自监督适配。",
+    papers: ["PETS", "Plan2Explore", "ReDRAW", "AdaJEPA", "Ensemble MBRL", "Pessimistic MBRL"],
+    covered: "主动探索、模型不确定性、source-to-target dynamics shift 与少量 transition 适配。",
+    gap: "offline support 之外的候选动作仍会被模型利用；适配也可能灾难性遗忘。",
+    constraint: "uncertainty arbitration 必须对比 ensemble；adapter 必须对比 ReDRAW。"
+  },
+  structure: {
+    index: "路线 08 / 08",
+    title: "让 latent 对象化、物理化或变成 belief state",
+    summary: "C-SWM、DeepMDP、bisimulation、MICo、Structured World Belief、Causal-JEPA、PhyLatent 与 PSG-JEPA 用对象、度量、物理状态或 belief 约束表示。",
+    papers: ["C-SWM", "DeepMDP", "DBC", "MICo", "Structured World Belief", "Causal-JEPA", "PhyLatent", "PSG-JEPA"],
+    covered: "对象级交互、control metric、物理 grounding、部分可观测 belief 与结构化表示。",
+    gap: "物理 probe 高分仍不自动等于规划更好；非 Markov 观测也不能靠一个 loss 修复。",
+    constraint: "必须把 history/belief、anti-collapse 和 decision geometry 三类问题拆开归因。"
+  }
+};
+
 const pipelineButtons = document.querySelectorAll(".pipeline-step");
 const stageVisual = document.querySelector(".stage-visual");
 pipelineButtons.forEach((button) => {
@@ -201,6 +276,29 @@ document.querySelectorAll(".method-picker button").forEach((button) => {
     document.getElementById("method-pros").innerHTML = content.pros.map((item) => `<li>${item}</li>`).join("");
     document.getElementById("method-cons").innerHTML = content.cons.map((item) => `<li>${item}</li>`).join("");
     document.getElementById("method-verdict").textContent = content.verdict;
+  });
+});
+
+document.querySelectorAll(".landscape-picker button").forEach((button) => {
+  button.addEventListener("click", () => {
+    const content = landscapeContent[button.dataset.family];
+    document.querySelectorAll(".landscape-picker button").forEach((item) => {
+      item.classList.toggle("active", item === button);
+      item.setAttribute("aria-selected", item === button ? "true" : "false");
+    });
+    document.getElementById("landscape-index").textContent = content.index;
+    document.getElementById("landscape-title").textContent = content.title;
+    document.getElementById("landscape-summary").textContent = content.summary;
+    document.getElementById("paper-cloud").innerHTML = content.papers.map((paper) => `<span>${paper}</span>`).join("");
+    document.getElementById("landscape-covered").textContent = content.covered;
+    document.getElementById("landscape-gap").textContent = content.gap;
+    document.getElementById("landscape-constraint").textContent = content.constraint;
+  });
+});
+
+document.querySelectorAll(".coverage-item").forEach((button) => {
+  button.addEventListener("click", () => {
+    button.setAttribute("aria-expanded", button.getAttribute("aria-expanded") === "true" ? "false" : "true");
   });
 });
 

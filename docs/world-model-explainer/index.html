@@ -22,6 +22,7 @@
       <a href="#environments">环境</a>
       <a href="#evaluation">评测</a>
       <a href="#methods">方法</a>
+      <a href="#landscape">相关工作</a>
       <a href="#research">研究路线</a>
       <a href="#status">现状</a>
     </nav>
@@ -251,6 +252,56 @@
       </div>
     </section>
 
+    <section class="section landscape-section" id="landscape">
+      <div class="section-inner">
+        <div class="section-heading">
+          <p class="eyebrow dark">RELATED WORK LANDSCAPE</p>
+          <h2>相关工作不是一串名字，而是八条逐渐汇合的路线</h2>
+          <p>我们全文审读了 64 篇核心论文。下面按“它解决了什么、留下了什么”组织，而不是按年份堆砌。点击路线查看代表工作与对 TDWM 的约束。</p>
+        </div>
+        <div class="landscape-layout">
+          <div class="landscape-picker" role="tablist" aria-label="相关工作路线">
+            <button type="button" class="active" data-family="jepa" role="tab" aria-selected="true"><span>01</span>视觉 JEPA 与 latent WM</button>
+            <button type="button" data-family="lewm_neighbors" role="tab" aria-selected="false"><span>02</span>LeWM 的直接增强</button>
+            <button type="button" data-family="successor" role="tab" aria-selected="false"><span>03</span>TD、successor 与长期模型</button>
+            <button type="button" data-family="decision" role="tab" aria-selected="false"><span>04</span>决策感知模型学习</button>
+            <button type="button" data-family="dreamer" role="tab" aria-selected="false"><span>05</span>想象训练与 MBRL</button>
+            <button type="button" data-family="action" role="tab" aria-selected="false"><span>06</span>World Action Model</button>
+            <button type="button" data-family="adapt" role="tab" aria-selected="false"><span>07</span>适配、OOD 与不确定性</button>
+            <button type="button" data-family="structure" role="tab" aria-selected="false"><span>08</span>结构化与物理表示</button>
+          </div>
+          <div class="landscape-detail" aria-live="polite">
+            <p class="landscape-index" id="landscape-index">路线 01 / 08</p>
+            <h3 id="landscape-title">从像素预测未来表示，而不是重建整张图</h3>
+            <p id="landscape-summary">DINO-WM、PLDM 与 LeWM 证明：不依赖 pixel decoder，也能从图像学习用于 MPC 的动作条件 latent dynamics。LeWM 再用 SIGReg 对抗表示坍塌。</p>
+            <div class="paper-cloud" id="paper-cloud">
+              <span>DINO-WM</span><span>PLDM</span><span>LeJEPA</span><span>LeWM</span><span>SIGReg</span>
+            </div>
+            <div class="landscape-judgment">
+              <div><b>已经解决</b><p id="landscape-covered">reward-free、pixels-only、任意动作条件的局部 latent rollout。</p></div>
+              <div><b>仍未解决</b><p id="landscape-gap">非坍塌和一步预测准确，并不保证 latent 距离适合长期规划。</p></div>
+              <div><b>对我们的约束</b><p id="landscape-constraint">不能把“decoder-free”或“加 anti-collapse”本身当作创新。</p></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="coverage-map">
+          <div class="coverage-heading">
+            <h3>哪些宽泛主张已经站不住</h3>
+            <p>红色不是说问题没价值，而是说不能再以这个宽度宣称首创。</p>
+          </div>
+          <div class="coverage-list">
+            <button type="button" class="coverage-item" aria-expanded="false"><span>RL 帮助 LeWM</span><b>太宽泛</b><small>MBRL、TD-MPC、Dreamer、RLVR-World 已覆盖大框架</small></button>
+            <button type="button" class="coverage-item" aria-expanded="false"><span>TD 防止坍塌</span><b>不足以创新</b><small>Self-Predictive RL、TD-JEPA、RLDP 与 SIGReg 后续已覆盖</small></button>
+            <button type="button" class="coverage-item" aria-expanded="false"><span>用 value 校准 dynamics</span><b>已有谱系</b><small>VAML、VaGraM、Value Equivalence、TOM 已直接研究</small></button>
+            <button type="button" class="coverage-item" aria-expanded="false"><span>reward-free reachability</span><b>已有直接近邻</b><small>HILP、RC-aux 与 Temporal-Distance JEPA</small></button>
+            <button type="button" class="coverage-item" aria-expanded="false"><span>一步 + 长期模型</span><b>高度拥挤</b><small>successor、gamma-model、TD-Flow、UHM、Jumpy WM</small></button>
+            <button type="button" class="coverage-item" aria-expanded="false"><span>更高 success = 更好 WM</span><b>错误归因</b><small>cost、solver、value、policy prior 与额外 compute 都可能解释</small></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="section research-section" id="research">
       <div class="section-inner">
         <div class="section-heading light">
@@ -288,6 +339,48 @@
             <span class="route-label">必要对照</span>
           </article>
         </div>
+        <div class="idea-evolution">
+          <div class="idea-heading">
+            <p class="eyebrow">IDEA EVOLUTION</p>
+            <h3>你的思路怎样一步步收窄</h3>
+          </div>
+          <div class="idea-track">
+            <article><span>起点</span><h4>RL 能不能帮助 LeWM？</h4><p>直觉成立，但范围过大，几乎整个 model-based RL 都能被算进去。</p></article>
+            <article><span>第一次收窄</span><h4>用 TD 防坍塌、让 latent 更物理</h4><p>相关工作已经很多，而且“对当前 value 有用”不等于“保留通用物理”。</p></article>
+            <article><span>第二次收窄</span><h4>给 LeWM 加长期 reachability</h4><p>RC-aux、Temporal-Distance、Fast-LeWM、TD-JEPA 已覆盖多种版本。</p></article>
+            <article class="current"><span>当前可检验问题</span><h4>局部反事实与长期 occupancy 是否互补？</h4><p>不是再加一个 loss，而是证明两类 operator 各自提供对方没有的信息，并在联合时不互相破坏。</p></article>
+          </div>
+        </div>
+        <div class="candidate-matrix">
+          <div class="candidate-heading">
+            <p class="eyebrow">THE CANDIDATE INTERFACE</p>
+            <h3>候选方案不是“LeWM + TD loss”，而是两个 operator 的受控协作</h3>
+            <p>左边回答任意动作前缀会发生什么，右边回答某类策略在较长 horizon 会占据什么未来。真正的研究变量是二者如何交换信息，以及梯度是否允许进入 encoder。</p>
+          </div>
+          <div class="operator-diagram">
+            <div class="operator local"><span>LOCAL</span><h4>Primitive local operator</h4><p>输入当前历史与任意候选动作序列，输出短期 counterfactual latent rollout。</p></div>
+            <div class="operator-link"><i>compatibility</i><b>⇄</b><small>consistency teacher<br>diagnostic / arbitration</small></div>
+            <div class="operator horizon"><span>HORIZON</span><h4>Policy-conditioned operator</h4><p>从真实数据学习长期 occupancy、feature expectation 或 horizon-conditioned future。</p></div>
+          </div>
+          <div class="gradient-options">
+            <div><b>A. Frozen diagnostic</b><span>冻结 LeWM，只检验长期误差信号是否能预测规划失败。</span></div>
+            <div><b>B. Detached adapter</b><span>梯度只进轻量 adapter / dynamics，不碰 encoder 与 SIGReg latent。</span></div>
+            <div><b>C. End-to-end</b><span>只有 A、B 有明确增益后才开放 encoder，并记录梯度冲突。</span></div>
+          </div>
+        </div>
+        <div class="triangle-thesis">
+          <div class="triangle-copy">
+            <p class="eyebrow">THE UNRESOLVED TRIANGLE</p>
+            <h3>真正可能形成贡献的是同时满足三件事</h3>
+            <p>LeWM 强在局部、任意动作和换目标后的可重估性；TD/successor 强在策略条件的长期结果。当前没有证据表明简单联合就能三者兼得。</p>
+          </div>
+          <div class="triangle-diagram" aria-label="TDWM 未解决三角关系">
+            <div class="triangle-node top">任意 primitive action<br>局部反事实</div>
+            <div class="triangle-node left">reward / policy 改变后<br>仍可重估</div>
+            <div class="triangle-node right">policy-conditioned<br>长期预测低误差</div>
+            <div class="triangle-center">TDWM<br>候选贡献</div>
+          </div>
+        </div>
         <div class="claim-filter">
           <div>
             <p class="eyebrow">CLAIM FILTER</p>
@@ -299,6 +392,33 @@
             <li><b>不是只会当前奖励：</b>冻结迁移到新目标或新奖励仍应保留价值。</li>
             <li><b>排除简单解释：</b>对比冻结头、普通多步 loss、RC-aux、planner-only 等量基线。</li>
           </ol>
+        </div>
+        <div class="falsification-board">
+          <div>
+            <p class="eyebrow">FALSIFICATION FIRST</p>
+            <h3>这项研究最重要的不是证明自己对，而是尽快发现自己哪里错</h3>
+          </div>
+          <div class="falsification-columns">
+            <div><h4>继续做的信号</h4><ul><li>长期头对 frozen-LeWM 失败有额外预测力</li><li>同 planner、cost、compute 下提升至少两个非饱和任务</li><li>held-out actions 与 reward revaluation 不退化</li><li>多 seed 支持结论</li></ul></div>
+            <div><h4>立即停或改题</h4><ul><li>冻结 LeWM + 普通 head 已获得全部收益</li><li>multi-horizon、RC-aux 或 Jumpy 已解释增益</li><li>只有新 terminal cost 提高成功率</li><li>长期提升伴随 action marginalization</li></ul></div>
+          </div>
+        </div>
+        <div class="ablation-section">
+          <div class="ablation-heading">
+            <p class="eyebrow">ATTRIBUTION MATRIX</p>
+            <h3>每个消融都在排除一种“看起来有效”的假解释</h3>
+          </div>
+          <div class="ablation-grid">
+            <div><span>A0</span><b>LeWM</b><p>原始基线</p></div>
+            <div><span>A1</span><b>Frozen + horizon head</b><p>latent 是否本来就够用</p></div>
+            <div><span>A3</span><b>Multi-horizon prediction</b><p>是否只是更长 supervision</p></div>
+            <div><span>A4</span><b>VAML / value surrogate</b><p>是否只需普通决策损失</p></div>
+            <div><span>A5</span><b>Jumpy / TD-Flow</b><p>长期模型近邻是否已解释</p></div>
+            <div><span>A6</span><b>Adapter-only gradient</b><p>是否真的需要改 encoder</p></div>
+            <div><span>A8</span><b>Terminal cost only</b><p>是否只是 planner 变强</p></div>
+            <div><span>A11</span><b>Shuffled / held-out actions</b><p>模型是否真的使用 action</p></div>
+            <div><span>A12</span><b>Matched anti-collapse</b><p>是否只是正则收益</p></div>
+          </div>
         </div>
       </div>
     </section>
