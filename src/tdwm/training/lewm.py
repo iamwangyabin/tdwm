@@ -361,6 +361,18 @@ def _build_generator_callback(generator: Any):
     return DataLoaderGeneratorCallback()
 
 
+def _resolve_loader_runtime(
+    loader_config: dict[str, Any], *, smoke: bool
+) -> dict[str, Any]:
+    workers = 0 if smoke else int(loader_config["workers"])
+    return {
+        "configured_workers": int(loader_config["workers"]),
+        "workers": workers,
+        "persistent_workers": workers > 0,
+        "prefetch_factor": loader_config["prefetch_factor"] if workers else None,
+    }
+
+
 def train_lewm(
     *,
     protocol_path: str | Path,
@@ -456,15 +468,14 @@ def train_lewm(
     )
 
     loader_cfg = protocol["loader"]
+    loader_runtime = _resolve_loader_runtime(loader_cfg, smoke=smoke)
     train_loader = torch.utils.data.DataLoader(
         train_set,
         batch_size=loader_cfg["batch_size"],
-        num_workers=loader_cfg["workers"],
+        num_workers=loader_runtime["workers"],
         drop_last=loader_cfg["train_drop_last"],
-        persistent_workers=loader_cfg["workers"] > 0,
-        prefetch_factor=(
-            loader_cfg["prefetch_factor"] if loader_cfg["workers"] else None
-        ),
+        persistent_workers=loader_runtime["persistent_workers"],
+        prefetch_factor=loader_runtime["prefetch_factor"],
         pin_memory=loader_cfg["pin_memory"],
         shuffle=loader_cfg["train_shuffle"],
         generator=generator,
@@ -472,12 +483,10 @@ def train_lewm(
     validation_loader = torch.utils.data.DataLoader(
         validation_set,
         batch_size=loader_cfg["batch_size"],
-        num_workers=loader_cfg["workers"],
+        num_workers=loader_runtime["workers"],
         drop_last=loader_cfg["validation_drop_last"],
-        persistent_workers=loader_cfg["workers"] > 0,
-        prefetch_factor=(
-            loader_cfg["prefetch_factor"] if loader_cfg["workers"] else None
-        ),
+        persistent_workers=loader_runtime["persistent_workers"],
+        prefetch_factor=loader_runtime["prefetch_factor"],
         pin_memory=loader_cfg["pin_memory"],
         shuffle=loader_cfg["validation_shuffle"],
     )
@@ -553,6 +562,7 @@ def train_lewm(
         "training": {
             "formal_optimizer_steps": formal_steps,
             "configured_optimizer_steps": total_steps,
+            "loader_runtime": loader_runtime,
             "resume_mode": resume,
             "resumed_from": checkpoint_path,
         },

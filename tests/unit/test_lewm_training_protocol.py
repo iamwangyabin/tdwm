@@ -1,7 +1,11 @@
 import unittest
 from pathlib import Path
 
-from tdwm.training.lewm import load_training_protocol, validate_training_protocol
+from tdwm.training.lewm import (
+    load_training_protocol,
+    _resolve_loader_runtime,
+    validate_training_protocol,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +31,20 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         protocol["training"]["scheduler_epochs"] = 100
         with self.assertRaisesRegex(ValueError, "remain locked together"):
             validate_training_protocol(protocol)
+
+    def test_smoke_disables_multiprocess_loader_teardown(self):
+        loader_config = {"workers": 6, "prefetch_factor": 3}
+
+        smoke = _resolve_loader_runtime(loader_config, smoke=True)
+        formal = _resolve_loader_runtime(loader_config, smoke=False)
+
+        self.assertEqual(smoke["configured_workers"], 6)
+        self.assertEqual(smoke["workers"], 0)
+        self.assertFalse(smoke["persistent_workers"])
+        self.assertIsNone(smoke["prefetch_factor"])
+        self.assertEqual(formal["workers"], 6)
+        self.assertTrue(formal["persistent_workers"])
+        self.assertEqual(formal["prefetch_factor"], 3)
 
 
 if __name__ == "__main__":
