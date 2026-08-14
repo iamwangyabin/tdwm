@@ -24,6 +24,9 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertIn(74104077358, protocol["dataset"]["accepted_size_bytes"])
         self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
         self.assertEqual(protocol["dataset"]["lance"]["suffix"], ".lance")
+        self.assertEqual(protocol["loader"]["workers"], 6)
+        self.assertEqual(protocol["loader"]["prefetch_factor"], 1)
+        self.assertEqual(protocol["loader"]["validation_workers"], 0)
         self.assertEqual(protocol["logging"]["type"], "csv")
         self.assertEqual(protocol["logging"]["flush_every_n_steps"], 50)
 
