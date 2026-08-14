@@ -33,6 +33,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--resume", choices=("auto", "never", "required"), default="auto"
     )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        help="Stop after this many optimizer steps; use only for a controlled throughput run.",
+    )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip validation; use only for a controlled throughput run.",
+    )
+    parser.add_argument("--loader-workers", type=int)
+    parser.add_argument("--loader-prefetch-factor", type=int)
+    parser.add_argument("--validation-loader-workers", type=int)
+    parser.add_argument(
+        "--run-label",
+        help="Append a label to the seed output directory for a separate controlled run.",
+    )
     return parser.parse_args()
 
 
@@ -50,6 +67,12 @@ def main() -> None:
         seed=args.seed,
         smoke=args.smoke,
         resume=args.resume,
+        max_steps=args.max_steps,
+        skip_validation=args.skip_validation,
+        loader_workers=args.loader_workers,
+        loader_prefetch_factor=args.loader_prefetch_factor,
+        validation_loader_workers=args.validation_loader_workers,
+        run_label=args.run_label,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

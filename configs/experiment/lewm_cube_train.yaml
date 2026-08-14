@@ -90,6 +90,7 @@ loader:
   batch_size: 128
   workers: 6
   prefetch_factor: 3
+  validation_workers: 0
   train_shuffle: true
   train_drop_last: true
   validation_shuffle: false

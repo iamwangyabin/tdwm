@@ -65,6 +65,14 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
     if logging.get("flush_every_n_steps", 0) <= 0:
         raise ValueError("CSV metrics must flush after a positive number of steps.")
 
+    loader = protocol.get("loader", {})
+    if loader.get("workers", -1) < 0:
+        raise ValueError("Training loader workers cannot be negative.")
+    if loader.get("prefetch_factor", 0) <= 0:
+        raise ValueError("Training loader prefetch_factor must be positive.")
+    if loader.get("validation_workers", loader.get("workers", -1)) < 0:
+        raise ValueError("Validation loader workers cannot be negative.")
+
     dataset = protocol.get("dataset", {})
     lance = dataset.get("lance", {})
     optimized = dataset.get("optimized_layout", {})
@@ -378,14 +386,52 @@ def _build_metrics_logger(run_dir: Path, logging_config: dict[str, Any]):
 
 
 def _resolve_loader_runtime(
-    loader_config: dict[str, Any], *, smoke: bool
-) -> dict[str, Any]:
-    workers = 0 if smoke else int(loader_config["workers"])
+    loader_config: dict[str, Any],
+    *,
+    smoke: bool,
+    workers: int | None = None,
+    prefetch_factor: int | None = None,
+    validation_workers: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    configured_train_workers = int(loader_config["workers"])
+    configured_prefetch_factor = int(loader_config["prefetch_factor"])
+    configured_validation_workers = int(
+        loader_config.get("validation_workers", configured_train_workers)
+    )
+    train_workers = configured_train_workers if workers is None else workers
+    train_prefetch_factor = (
+        configured_prefetch_factor if prefetch_factor is None else prefetch_factor
+    )
+    validation_workers = (
+        configured_validation_workers
+        if validation_workers is None
+        else validation_workers
+    )
+    if min(train_workers, validation_workers) < 0:
+        raise ValueError("Loader workers cannot be negative.")
+    if train_prefetch_factor <= 0:
+        raise ValueError("Loader prefetch_factor must be positive.")
+
+    def runtime(*, configured_workers: int, active_workers: int, prefetch: int):
+        effective_workers = 0 if smoke else active_workers
+        return {
+            "configured_workers": configured_workers,
+            "workers": effective_workers,
+            "persistent_workers": effective_workers > 0,
+            "prefetch_factor": prefetch if effective_workers else None,
+        }
+
     return {
-        "configured_workers": int(loader_config["workers"]),
-        "workers": workers,
-        "persistent_workers": workers > 0,
-        "prefetch_factor": loader_config["prefetch_factor"] if workers else None,
+        "train": runtime(
+            configured_workers=configured_train_workers,
+            active_workers=train_workers,
+            prefetch=train_prefetch_factor,
+        ),
+        "validation": runtime(
+            configured_workers=configured_validation_workers,
+            active_workers=validation_workers,
+            prefetch=configured_prefetch_factor,
+        ),
     }
 
 
@@ -397,12 +443,22 @@ def train_lewm(
     seed: int,
     smoke: bool = False,
     resume: str = "auto",
+    max_steps: int | None = None,
+    skip_validation: bool = False,
+    loader_workers: int | None = None,
+    loader_prefetch_factor: int | None = None,
+    validation_loader_workers: int | None = None,
+    run_label: str | None = None,
 ) -> dict[str, Any]:
     protocol = load_training_protocol(protocol_path)
     if seed not in protocol["seeds"]:
         raise ValueError(f"Seed {seed} is not in the locked seeds {protocol['seeds']}.")
     if resume not in {"auto", "never", "required"}:
         raise ValueError("resume must be one of: auto, never, required.")
+    if max_steps is not None and max_steps <= 0:
+        raise ValueError("max_steps must be positive when provided.")
+    if run_label and Path(run_label).name != run_label:
+        raise ValueError("run_label must be a single directory name.")
 
     dataset_source = validate_cube_training_dataset(
         dataset_path, protocol["dataset"]
@@ -410,7 +466,10 @@ def train_lewm(
     dataset_path = Path(dataset_source["path"])
 
     output_dir = Path(output_dir).expanduser().resolve()
-    run_dir = output_dir / (f"seed_{seed}_smoke" if smoke else f"seed_{seed}")
+    run_name = f"seed_{seed}_smoke" if smoke else f"seed_{seed}"
+    if run_label:
+        run_name = f"{run_name}_{run_label}"
+    run_dir = output_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
     compatibility = prepare_cloud_runtime() or {}
     compatibility["lightning_external_callbacks"] = {
@@ -484,14 +543,20 @@ def train_lewm(
     )
 
     loader_cfg = protocol["loader"]
-    loader_runtime = _resolve_loader_runtime(loader_cfg, smoke=smoke)
+    loader_runtime = _resolve_loader_runtime(
+        loader_cfg,
+        smoke=smoke,
+        workers=loader_workers,
+        prefetch_factor=loader_prefetch_factor,
+        validation_workers=validation_loader_workers,
+    )
     train_loader = torch.utils.data.DataLoader(
         train_set,
         batch_size=loader_cfg["batch_size"],
-        num_workers=loader_runtime["workers"],
+        num_workers=loader_runtime["train"]["workers"],
         drop_last=loader_cfg["train_drop_last"],
-        persistent_workers=loader_runtime["persistent_workers"],
-        prefetch_factor=loader_runtime["prefetch_factor"],
+        persistent_workers=loader_runtime["train"]["persistent_workers"],
+        prefetch_factor=loader_runtime["train"]["prefetch_factor"],
         pin_memory=loader_cfg["pin_memory"],
         shuffle=loader_cfg["train_shuffle"],
         generator=generator,
@@ -499,10 +564,10 @@ def train_lewm(
     validation_loader = torch.utils.data.DataLoader(
         validation_set,
         batch_size=loader_cfg["batch_size"],
-        num_workers=loader_runtime["workers"],
+        num_workers=loader_runtime["validation"]["workers"],
         drop_last=loader_cfg["validation_drop_last"],
-        persistent_workers=loader_runtime["persistent_workers"],
-        prefetch_factor=loader_runtime["prefetch_factor"],
+        persistent_workers=loader_runtime["validation"]["persistent_workers"],
+        prefetch_factor=loader_runtime["validation"]["prefetch_factor"],
         pin_memory=loader_cfg["pin_memory"],
         shuffle=loader_cfg["validation_shuffle"],
     )
@@ -519,6 +584,8 @@ def train_lewm(
 
     formal_steps = protocol["training"]["scheduler_epochs"] * len(train_loader)
     total_steps = min(2, len(train_loader)) if smoke else formal_steps
+    if max_steps is not None:
+        total_steps = min(max_steps, formal_steps)
     module = _build_training_module(world_model, protocol, total_steps)
     checkpoint_dir = run_dir / "checkpoints" / "lightning"
     checkpoint_callback = ModelCheckpoint(
@@ -540,10 +607,11 @@ def train_lewm(
             devices=1,
             precision=protocol["training"]["precision"],
             max_epochs=epochs,
+            max_steps=max_steps if max_steps is not None else -1,
             gradient_clip_val=protocol["training"]["gradient_clip_norm"],
             limit_train_batches=2 if smoke else 1.0,
-            limit_val_batches=1 if smoke else 1.0,
-            num_sanity_val_steps=1,
+            limit_val_batches=0.0 if skip_validation else (1 if smoke else 1.0),
+            num_sanity_val_steps=0 if skip_validation else 1,
             logger=metrics_logger,
             callbacks=[
                 checkpoint_callback,
@@ -580,6 +648,8 @@ def train_lewm(
             "formal_optimizer_steps": formal_steps,
             "configured_optimizer_steps": total_steps,
             "loader_runtime": loader_runtime,
+            "max_steps": max_steps,
+            "skip_validation": skip_validation,
             "resume_mode": resume,
             "resumed_from": checkpoint_path,
         },

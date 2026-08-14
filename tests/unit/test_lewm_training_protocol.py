@@ -35,18 +35,37 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
             validate_training_protocol(protocol)
 
     def test_smoke_disables_multiprocess_loader_teardown(self):
-        loader_config = {"workers": 6, "prefetch_factor": 3}
+        loader_config = {
+            "workers": 6,
+            "prefetch_factor": 3,
+            "validation_workers": 0,
+        }
 
         smoke = _resolve_loader_runtime(loader_config, smoke=True)
         formal = _resolve_loader_runtime(loader_config, smoke=False)
 
-        self.assertEqual(smoke["configured_workers"], 6)
-        self.assertEqual(smoke["workers"], 0)
-        self.assertFalse(smoke["persistent_workers"])
-        self.assertIsNone(smoke["prefetch_factor"])
-        self.assertEqual(formal["workers"], 6)
-        self.assertTrue(formal["persistent_workers"])
-        self.assertEqual(formal["prefetch_factor"], 3)
+        self.assertEqual(smoke["train"]["configured_workers"], 6)
+        self.assertEqual(smoke["train"]["workers"], 0)
+        self.assertFalse(smoke["train"]["persistent_workers"])
+        self.assertIsNone(smoke["train"]["prefetch_factor"])
+        self.assertEqual(formal["train"]["workers"], 6)
+        self.assertTrue(formal["train"]["persistent_workers"])
+        self.assertEqual(formal["train"]["prefetch_factor"], 3)
+        self.assertEqual(formal["validation"]["workers"], 0)
+
+    def test_loader_overrides_are_recorded_without_changing_data(self):
+        runtime = _resolve_loader_runtime(
+            {"workers": 6, "prefetch_factor": 3, "validation_workers": 0},
+            smoke=False,
+            workers=12,
+            prefetch_factor=2,
+            validation_workers=1,
+        )
+
+        self.assertEqual(runtime["train"]["configured_workers"], 6)
+        self.assertEqual(runtime["train"]["workers"], 12)
+        self.assertEqual(runtime["train"]["prefetch_factor"], 2)
+        self.assertEqual(runtime["validation"]["workers"], 1)
 
     def test_csv_metrics_logging_is_required(self):
         protocol = load_training_protocol(
