@@ -3,6 +3,7 @@ from pathlib import Path
 
 from tdwm.training.lewm import (
     load_training_protocol,
+    _resolve_train_batch_limit,
     _resolve_loader_runtime,
     validate_training_protocol,
 )
@@ -66,6 +67,26 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(runtime["train"]["workers"], 12)
         self.assertEqual(runtime["train"]["prefetch_factor"], 2)
         self.assertEqual(runtime["validation"]["workers"], 1)
+
+    def test_throughput_run_ends_at_a_loader_epoch_boundary(self):
+        self.assertEqual(
+            _resolve_train_batch_limit(
+                smoke=False, max_steps=100, train_loader_length=12796
+            ),
+            100,
+        )
+        self.assertEqual(
+            _resolve_train_batch_limit(
+                smoke=False, max_steps=20000, train_loader_length=12796
+            ),
+            12796,
+        )
+        self.assertEqual(
+            _resolve_train_batch_limit(
+                smoke=False, max_steps=None, train_loader_length=12796
+            ),
+            1.0,
+        )
 
     def test_csv_metrics_logging_is_required(self):
         protocol = load_training_protocol(

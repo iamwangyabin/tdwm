@@ -435,6 +435,18 @@ def _resolve_loader_runtime(
     }
 
 
+def _resolve_train_batch_limit(
+    *, smoke: bool, max_steps: int | None, train_loader_length: int
+) -> int | float:
+    if smoke:
+        return min(2, train_loader_length)
+    if max_steps is not None:
+        # Finish a short profiling run at an epoch boundary. Lightning's
+        # mid-epoch max_steps teardown can abort persistent DataLoader workers.
+        return min(max_steps, train_loader_length)
+    return 1.0
+
+
 def train_lewm(
     *,
     protocol_path: str | Path,
@@ -583,9 +595,14 @@ def train_lewm(
         )
 
     formal_steps = protocol["training"]["scheduler_epochs"] * len(train_loader)
+    train_batch_limit = _resolve_train_batch_limit(
+        smoke=smoke,
+        max_steps=max_steps,
+        train_loader_length=len(train_loader),
+    )
     total_steps = min(2, len(train_loader)) if smoke else formal_steps
     if max_steps is not None:
-        total_steps = min(max_steps, formal_steps)
+        total_steps = int(train_batch_limit)
     module = _build_training_module(world_model, protocol, total_steps)
     checkpoint_dir = run_dir / "checkpoints" / "lightning"
     checkpoint_callback = ModelCheckpoint(
@@ -596,7 +613,7 @@ def train_lewm(
         save_top_k=-1,
     )
     metrics_logger = _build_metrics_logger(run_dir, protocol["logging"])
-    epochs = 1 if smoke else protocol["training"]["epochs"]
+    epochs = 1 if smoke or max_steps is not None else protocol["training"]["epochs"]
     with patch(
         "lightning.pytorch.trainer.connectors.callback_connector._load_external_callbacks",
         return_value=[],
@@ -607,9 +624,9 @@ def train_lewm(
             devices=1,
             precision=protocol["training"]["precision"],
             max_epochs=epochs,
-            max_steps=max_steps if max_steps is not None else -1,
+            max_steps=-1,
             gradient_clip_val=protocol["training"]["gradient_clip_norm"],
-            limit_train_batches=2 if smoke else 1.0,
+            limit_train_batches=train_batch_limit,
             limit_val_batches=0.0 if skip_validation else (1 if smoke else 1.0),
             num_sanity_val_steps=0 if skip_validation else 1,
             logger=metrics_logger,
