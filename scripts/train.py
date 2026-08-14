@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         default=os.environ.get("TDWM_CUBE_DATASET"),
-        help="Path to cube_single_expert.h5 (or set TDWM_CUBE_DATASET).",
+        help="Path to locked Cube HDF5 or audited .lance data.",
     )
     parser.add_argument("--seed", required=True, type=int)
     parser.add_argument(

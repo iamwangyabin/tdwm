@@ -17,6 +17,8 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["training"]["epochs"], 10)
         self.assertEqual(protocol["training"]["scheduler_epochs"], 10)
         self.assertIn(74104077358, protocol["dataset"]["accepted_size_bytes"])
+        self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
+        self.assertEqual(protocol["dataset"]["lance"]["suffix"], ".lance")
 
     def test_scheduler_must_match_training_horizon(self):
         protocol = load_training_protocol(

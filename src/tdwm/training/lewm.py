@@ -15,6 +15,7 @@ import numpy as np
 import yaml
 
 from tdwm.adapters import prepare_cloud_runtime
+from tdwm.training.cube_data import validate_cube_training_dataset
 
 
 def load_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -57,6 +58,26 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("Training epochs must be positive.")
     if not protocol.get("seeds"):
         raise ValueError("At least one training seed is required.")
+
+    dataset = protocol.get("dataset", {})
+    lance = dataset.get("lance", {})
+    optimized = dataset.get("optimized_layout", {})
+    if lance.get("suffix") != ".lance":
+        raise ValueError("The fast Cube layout must use a .lance directory.")
+    if lance.get("manifest_suffix") != ".manifest.json":
+        raise ValueError("The Lance conversion manifest suffix must remain locked.")
+    if lance.get("image_codec") != "jpeg" or lance.get("jpeg_quality") != 100:
+        raise ValueError("The fast Cube layout must use JPEG quality 100.")
+    if lance.get("minimum_pixel_verification_samples", 0) <= 0:
+        raise ValueError("Lance pixel verification must use at least one sample.")
+    if lance.get("stable_worldmodel_version") != "0.1.1":
+        raise ValueError("Lance conversion is locked to stable-worldmodel 0.1.1.")
+    if lance.get("source", {}).get("size_bytes") not in dataset.get(
+        "accepted_size_bytes", []
+    ):
+        raise ValueError("The Lance source must be an accepted HDF5 layout.")
+    if lance.get("source", {}).get("sha256") != optimized.get("sha256"):
+        raise ValueError("The Lance source must match the audited optimized HDF5.")
 
 
 def _jsonable(value: Any) -> Any:
@@ -350,19 +371,10 @@ def train_lewm(
     if resume not in {"auto", "never", "required"}:
         raise ValueError("resume must be one of: auto, never, required.")
 
-    dataset_path = Path(dataset_path).expanduser().resolve()
-    if not dataset_path.is_file():
-        raise FileNotFoundError(f"Cube dataset not found: {dataset_path}")
-    actual_size = dataset_path.stat().st_size
-    expected_sizes = protocol["dataset"].get(
-        "accepted_size_bytes",
-        [protocol["dataset"].get("expected_size_bytes")],
+    dataset_source = validate_cube_training_dataset(
+        dataset_path, protocol["dataset"]
     )
-    if actual_size not in expected_sizes:
-        raise ValueError(
-            f"Cube dataset size {actual_size} is not one of the locked layouts "
-            f"{expected_sizes}."
-        )
+    dataset_path = Path(dataset_source["path"])
 
     output_dir = Path(output_dir).expanduser().resolve()
     run_dir = output_dir / (f"seed_{seed}_smoke" if smoke else f"seed_{seed}")
@@ -394,6 +406,7 @@ def train_lewm(
     dataset_cfg = protocol["dataset"]
     dataset = swm.data.load_dataset(
         str(dataset_path),
+        format=dataset_source["format"],
         transform=None,
         num_steps=sequence["num_steps"],
         frameskip=sequence["frame_skip"],
@@ -525,8 +538,7 @@ def train_lewm(
         "seed": seed,
         "smoke": smoke,
         "dataset": {
-            "path": str(dataset_path),
-            "size_bytes": actual_size,
+            **dataset_source,
             "episodes": actual_episodes,
             "transitions": actual_transitions,
             "sequence_samples": len(dataset),
