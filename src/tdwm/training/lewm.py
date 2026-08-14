@@ -70,6 +70,11 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("The fast Cube layout must use JPEG quality 100.")
     if lance.get("minimum_pixel_verification_samples", 0) <= 0:
         raise ValueError("Lance pixel verification must use at least one sample.")
+    numeric_verification = lance.get("numeric_verification", {})
+    if set(numeric_verification) != set(dataset.get("keys_to_cache", [])):
+        raise ValueError("Lance numeric verification must cover cached columns.")
+    if set(numeric_verification.values()) - {"exact", "float32_cast_exact"}:
+        raise ValueError("Lance numeric verification contains an unknown policy.")
     if lance.get("stable_worldmodel_version") != "0.1.1":
         raise ValueError("Lance conversion is locked to stable-worldmodel 0.1.1.")
     if lance.get("source", {}).get("size_bytes") not in dataset.get(

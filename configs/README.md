@@ -144,6 +144,6 @@ python scripts/convert_cube_lance.py \
 
 转换固定使用 JPEG 质量 100，并生成相邻的 `.lance.manifest.json`。训练入口同时接受
 锁定大小的 HDF5 文件和带有效 manifest 的 `.lance` 目录；缺少 manifest、转换版本
-不符、图像质量不是 100，或 `action`/`observation` 未精确通过校验的 Lance 数据会被
-拒绝。JPEG-100 保持图像分辨率，但不是逐像素无损，因此必须把这类运行标记为快速
-数据变体，并保证所有对比 seed 使用同一个转换结果。
+不符、图像质量不是 100、`action` 不是精确值，或 `observation` 不是源数据的确定性
+float32 转换时，Lance 数据会被拒绝。JPEG-100 保持图像分辨率，但不是逐像素无损，
+因此必须把这类运行标记为快速数据变体，并保证所有对比 seed 使用同一个转换结果。

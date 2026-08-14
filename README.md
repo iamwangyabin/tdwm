@@ -27,8 +27,9 @@ Cube 的训练样本是随机 sequence clip。HDF5 在 `/gemini/data-*` 远程�
 ### 一次性转换
 
 在可写环境中执行。脚本会先核对源 HDF5 的大小和 SHA-256，再转换全部 episode；
-转换后会核对 episode 边界、`action` 和 `observation` 的精确值，并抽样记录 JPEG
-像素误差。已有输出不会被覆盖，失败或未生成 manifest 的 Lance 目录不能用于训练。
+转换后会核对 episode 边界、`action` 的精确值、`observation` 的确定性 float32
+转换，并抽样记录数值与 JPEG 像素误差。已有输出不会被覆盖，失败或未生成 manifest
+的 Lance 目录不能用于训练。
 
 ```bash
 python scripts/convert_cube_lance.py \

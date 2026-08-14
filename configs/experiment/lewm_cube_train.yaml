@@ -26,6 +26,9 @@ dataset:
     image_codec: jpeg
     jpeg_quality: 100
     minimum_pixel_verification_samples: 128
+    numeric_verification:
+      action: exact
+      observation: float32_cast_exact
     source:
       file: cube_single_expert_chunk1.h5
       size_bytes: 74104077358

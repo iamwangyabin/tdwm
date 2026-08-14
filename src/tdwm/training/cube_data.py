@@ -65,10 +65,16 @@ def validate_lance_manifest(
     )
 
     numeric_columns = verification.get("numeric_columns", {})
-    for column in dataset_config["keys_to_cache"]:
-        if numeric_columns.get(column, {}).get("exact") is not True:
+    for column, policy in lance["numeric_verification"].items():
+        column_check = numeric_columns.get(column, {})
+        _expect_equal(
+            f"verification.numeric_columns.{column}.policy",
+            column_check.get("policy"),
+            policy,
+        )
+        if column_check.get("passed") is not True:
             raise ValueError(
-                f"Lance manifest must record an exact {column!r} verification."
+                f"Lance manifest failed the {column!r} numeric verification."
             )
 
     pixel_check = verification.get("pixels", {})

@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("output", type=Path)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--verify-samples", type=int, default=128)
+    parser.add_argument(
+        "--audit-existing",
+        action="store_true",
+        help="Audit an existing Lance output and create its missing manifest.",
+    )
     return parser.parse_args()
 
 
@@ -82,6 +87,7 @@ def _verify_conversion(
     expected_episodes: int,
     expected_transitions: int,
     pixel_samples: int,
+    numeric_policies: dict[str, str],
 ) -> dict[str, Any]:
     import stable_worldmodel as swm
 
@@ -110,20 +116,40 @@ def _verify_conversion(
         )
 
     numeric_checks: dict[str, Any] = {}
-    for column in ("action", "observation"):
+    for column, policy in numeric_policies.items():
         source_values = np.asarray(source.get_col_data(column))
         output_values = np.asarray(output.get_col_data(column))
         exact = source_values.dtype == output_values.dtype and np.array_equal(
             source_values, output_values, equal_nan=True
         )
+        float32_cast_exact = (
+            source_values.dtype.kind == "f"
+            and output_values.dtype == np.dtype(np.float32)
+            and np.array_equal(
+                source_values.astype(np.float32), output_values, equal_nan=True
+            )
+        )
+        passed = exact if policy == "exact" else float32_cast_exact
+        difference = np.abs(
+            source_values.astype(np.float64) - output_values.astype(np.float64)
+        )
         numeric_checks[column] = {
+            "policy": policy,
+            "passed": bool(passed),
             "exact": bool(exact),
-            "dtype": str(output_values.dtype),
+            "float32_cast_exact": bool(float32_cast_exact),
+            "source_dtype": str(source_values.dtype),
+            "destination_dtype": str(output_values.dtype),
             "shape": list(output_values.shape),
-            "sha256": _array_sha256(output_values),
+            "source_sha256": _array_sha256(source_values),
+            "destination_sha256": _array_sha256(output_values),
+            "maximum_absolute_error": float(np.nanmax(difference)),
+            "mean_absolute_error": float(np.nanmean(difference)),
         }
-        if not exact:
-            raise RuntimeError(f"Lance conversion changed the {column!r} column.")
+        if not passed:
+            raise RuntimeError(
+                f"Lance conversion failed the {policy!r} policy for {column!r}."
+            )
 
     absolute_error = 0.0
     squared_error = 0.0
@@ -165,6 +191,7 @@ def convert_cube_to_lance(
     *,
     protocol_path: Path = DEFAULT_CONFIG,
     verify_samples: int = 128,
+    audit_existing: bool = False,
 ) -> dict[str, Any]:
     source_path = source_path.expanduser().resolve()
     output_path = output_path.expanduser().resolve()
@@ -177,8 +204,13 @@ def convert_cube_to_lance(
         raise FileNotFoundError(source_path)
     if output_path.suffix.lower() != lance_config["suffix"]:
         raise ValueError(f"Lance output must end in {lance_config['suffix']!r}.")
-    if output_path.exists() or manifest_path.exists():
-        raise FileExistsError(output_path if output_path.exists() else manifest_path)
+    if manifest_path.exists():
+        raise FileExistsError(manifest_path)
+    if audit_existing:
+        if not output_path.is_dir():
+            raise FileNotFoundError(output_path)
+    elif output_path.exists():
+        raise FileExistsError(output_path)
     if verify_samples < lance_config["minimum_pixel_verification_samples"]:
         raise ValueError(
             "verify_samples is below the protocol's minimum pixel audit size."
@@ -205,20 +237,22 @@ def convert_cube_to_lance(
     import stable_worldmodel as swm
 
     started = time.time()
-    swm.data.convert(
-        str(source_path),
-        str(output_path),
-        source_format="hdf5",
-        dest_format="lance",
-        jpeg_quality=lance_config["jpeg_quality"],
-        mode="error",
-    )
+    if not audit_existing:
+        swm.data.convert(
+            str(source_path),
+            str(output_path),
+            source_format="hdf5",
+            dest_format="lance",
+            jpeg_quality=lance_config["jpeg_quality"],
+            mode="error",
+        )
     verification = _verify_conversion(
         source_path,
         output_path,
         expected_episodes=dataset_config["expected_episodes"],
         expected_transitions=dataset_config["expected_transitions"],
         pixel_samples=verify_samples,
+        numeric_policies=lance_config["numeric_verification"],
     )
     output_size = sum(
         path.stat().st_size for path in output_path.rglob("*") if path.is_file()
@@ -241,7 +275,8 @@ def convert_cube_to_lance(
             "api": "swm.data.convert",
             "stable_worldmodel_version": package_version,
             "mode": "error",
-            "elapsed_seconds": time.time() - started,
+            "conversion_performed_in_this_run": not audit_existing,
+            "execution_elapsed_seconds": time.time() - started,
         },
         "verification": verification,
     }
@@ -256,6 +291,7 @@ def main() -> None:
         args.output,
         protocol_path=args.config,
         verify_samples=args.verify_samples,
+        audit_existing=args.audit_existing,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

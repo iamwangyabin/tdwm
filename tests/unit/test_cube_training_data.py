@@ -42,8 +42,14 @@ class CubeTrainingDataTest(unittest.TestCase):
                 "episodes": self.dataset_config["expected_episodes"],
                 "transitions": self.dataset_config["expected_transitions"],
                 "numeric_columns": {
-                    "action": {"exact": True},
-                    "observation": {"exact": True},
+                    "action": {
+                        "policy": "exact",
+                        "passed": True,
+                    },
+                    "observation": {
+                        "policy": "float32_cast_exact",
+                        "passed": True,
+                    },
                 },
                 "pixels": {
                     "samples": lance["minimum_pixel_verification_samples"],
