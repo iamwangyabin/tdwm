@@ -59,6 +59,12 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
     if not protocol.get("seeds"):
         raise ValueError("At least one training seed is required.")
 
+    logging = protocol.get("logging", {})
+    if logging.get("type") != "csv":
+        raise ValueError("LeWM training must persist metrics with a CSV logger.")
+    if logging.get("flush_every_n_steps", 0) <= 0:
+        raise ValueError("CSV metrics must flush after a positive number of steps.")
+
     dataset = protocol.get("dataset", {})
     lance = dataset.get("lance", {})
     optimized = dataset.get("optimized_layout", {})
@@ -361,6 +367,16 @@ def _build_generator_callback(generator: Any):
     return DataLoaderGeneratorCallback()
 
 
+def _build_metrics_logger(run_dir: Path, logging_config: dict[str, Any]):
+    from lightning.pytorch.loggers import CSVLogger
+
+    return CSVLogger(
+        save_dir=str(run_dir),
+        name="metrics",
+        flush_logs_every_n_steps=logging_config["flush_every_n_steps"],
+    )
+
+
 def _resolve_loader_runtime(
     loader_config: dict[str, Any], *, smoke: bool
 ) -> dict[str, Any]:
@@ -512,6 +528,7 @@ def train_lewm(
         save_last=True,
         save_top_k=-1,
     )
+    metrics_logger = _build_metrics_logger(run_dir, protocol["logging"])
     epochs = 1 if smoke else protocol["training"]["epochs"]
     with patch(
         "lightning.pytorch.trainer.connectors.callback_connector._load_external_callbacks",
@@ -527,7 +544,7 @@ def train_lewm(
             limit_train_batches=2 if smoke else 1.0,
             limit_val_batches=1 if smoke else 1.0,
             num_sanity_val_steps=1,
-            logger=False,
+            logger=metrics_logger,
             callbacks=[
                 checkpoint_callback,
                 _build_export_callback(run_dir, model_config),
@@ -565,6 +582,10 @@ def train_lewm(
             "loader_runtime": loader_runtime,
             "resume_mode": resume,
             "resumed_from": checkpoint_path,
+        },
+        "logging": {
+            **protocol["logging"],
+            "path": metrics_logger.log_dir,
         },
         "runtime": {
             "stable_worldmodel": package_version,

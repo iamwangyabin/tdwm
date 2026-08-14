@@ -96,6 +96,10 @@ loader:
   validation_drop_last: false
   pin_memory: true
 
+logging:
+  type: csv
+  flush_every_n_steps: 50
+
 optimizer:
   type: AdamW
   learning_rate: 0.00005

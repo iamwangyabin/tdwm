@@ -23,6 +23,8 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertIn(74104077358, protocol["dataset"]["accepted_size_bytes"])
         self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
         self.assertEqual(protocol["dataset"]["lance"]["suffix"], ".lance")
+        self.assertEqual(protocol["logging"]["type"], "csv")
+        self.assertEqual(protocol["logging"]["flush_every_n_steps"], 50)
 
     def test_scheduler_must_match_training_horizon(self):
         protocol = load_training_protocol(
@@ -45,6 +47,15 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(formal["workers"], 6)
         self.assertTrue(formal["persistent_workers"])
         self.assertEqual(formal["prefetch_factor"], 3)
+
+    def test_csv_metrics_logging_is_required(self):
+        protocol = load_training_protocol(
+            ROOT / "configs/experiment/lewm_cube_train.yaml"
+        )
+        protocol["logging"]["flush_every_n_steps"] = 0
+
+        with self.assertRaisesRegex(ValueError, "flush after a positive"):
+            validate_training_protocol(protocol)
 
 
 if __name__ == "__main__":
