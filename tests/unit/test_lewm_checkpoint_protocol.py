@@ -23,6 +23,13 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
             25,
         )
 
+    def test_trained_lance_protocol_is_valid(self):
+        protocol = load_protocol(
+            ROOT / "configs/experiment/lewm_cube_seed0_o25.yaml"
+        )
+        self.assertEqual(protocol["dataset"]["format"], "lance")
+        self.assertEqual(protocol["checkpoint"]["epoch"], 10)
+
     def test_sampler_is_deterministic_and_respects_goal_offset(self):
         lengths = np.array([10, 12, 8])
         first = sample_start_goal_pairs(

@@ -29,6 +29,10 @@ def parse_args() -> argparse.Namespace:
         help="Run directory. Defaults below TDWM_RUN_ROOT or outputs/.",
     )
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument(
+        "--checkpoint-path",
+        help="Local Stable World Model export directory (for example, epoch_10).",
+    )
     parser.add_argument("--video", action="store_true")
     parser.add_argument(
         "--smoke",
@@ -51,6 +55,7 @@ def main() -> None:
         dataset_path=args.dataset,
         output_dir=output_dir,
         checkpoint_name=args.checkpoint,
+        checkpoint_path=args.checkpoint_path,
         video=args.video,
         smoke=args.smoke,
     )

@@ -153,12 +153,86 @@ def _resolve_checkpoint_file(cache_root: Path, checkpoint_name: str) -> Path:
     )
 
 
+def _resolve_local_export_checkpoint(
+    checkpoint_path: str | Path,
+) -> tuple[str, Path, Path]:
+    """Resolve a Stable World Model export written by the LeWM trainer."""
+
+    requested = Path(checkpoint_path).expanduser().resolve()
+    checkpoint_dir = requested if requested.is_dir() else requested.parent
+    weights = sorted(checkpoint_dir.glob("*.pt"))
+    if len(weights) != 1:
+        raise FileNotFoundError(
+            "A local LeWM export must be a directory containing exactly one .pt file."
+        )
+    if checkpoint_dir.parent.name != "checkpoints":
+        raise ValueError(
+            "A local LeWM export must use Stable World Model's "
+            "<cache_dir>/checkpoints/<run_name> layout."
+        )
+    return checkpoint_dir.name, weights[0], checkpoint_dir.parent.parent
+
+
+def _resolve_dataset_source(
+    dataset_path: Path, dataset_config: dict[str, Any]
+) -> dict[str, Any]:
+    if dataset_path.is_file():
+        expected_sizes = dataset_config.get(
+            "accepted_size_bytes", [dataset_config.get("expected_size_bytes")]
+        )
+        actual_size = dataset_path.stat().st_size
+        if actual_size not in expected_sizes:
+            raise ValueError(
+                f"Dataset size mismatch: expected one of {expected_sizes}, "
+                f"found {actual_size}."
+            )
+        return {
+            "path": str(dataset_path),
+            "format": "hdf5",
+            "size_bytes": actual_size,
+            "conversion_manifest_path": None,
+        }
+
+    lance = dataset_config.get("lance")
+    if (
+        not dataset_path.is_dir()
+        or dataset_path.suffix.lower() != ".lance"
+        or lance is None
+    ):
+        raise FileNotFoundError(f"Cube dataset not found: {dataset_path}")
+
+    manifest_path = Path(f"{dataset_path}{lance['manifest_suffix']}")
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Audited Lance conversion manifest not found: {manifest_path}"
+        )
+    with manifest_path.open() as stream:
+        manifest = json.load(stream)
+    destination = manifest.get("destination", {})
+    conversion = manifest.get("conversion", {})
+    if destination.get("format") != "lance":
+        raise ValueError("The Cube Lance manifest does not describe a Lance table.")
+    if destination.get("image_codec") != lance["image_codec"]:
+        raise ValueError("The Cube Lance manifest image codec differs from protocol.")
+    if destination.get("jpeg_quality") != lance["jpeg_quality"]:
+        raise ValueError("The Cube Lance manifest JPEG quality differs from protocol.")
+    if conversion.get("stable_worldmodel_version") != "0.1.1":
+        raise ValueError("The Cube Lance manifest was not created by stable-worldmodel 0.1.1.")
+    return {
+        "path": str(dataset_path),
+        "format": "lance",
+        "size_bytes": destination.get("size_bytes"),
+        "conversion_manifest_path": str(manifest_path),
+    }
+
+
 def evaluate_official_lewm(
     *,
     protocol_path: str | Path,
     dataset_path: str | Path,
     output_dir: str | Path,
     checkpoint_name: str | None = None,
+    checkpoint_path: str | Path | None = None,
     video: bool = False,
     smoke: bool = False,
 ) -> dict[str, Any]:
@@ -179,15 +253,7 @@ def evaluate_official_lewm(
     dataset_path = Path(dataset_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    if not dataset_path.is_file():
-        raise FileNotFoundError(f"Cube dataset not found: {dataset_path}")
-
-    expected_size = protocol["dataset"].get("expected_size_bytes")
-    actual_size = dataset_path.stat().st_size
-    if expected_size is not None and actual_size != expected_size:
-        raise ValueError(
-            f"Dataset size mismatch: expected {expected_size}, found {actual_size}."
-        )
+    dataset_source = _resolve_dataset_source(dataset_path, protocol["dataset"])
 
     compatibility = prepare_cloud_runtime()
 
@@ -206,8 +272,18 @@ def evaluate_official_lewm(
     cache_root = Path(
         os.environ.get("STABLEWM_HOME", str(Path.home() / ".stable_worldmodel"))
     ).expanduser()
-    checkpoint_name = checkpoint_name or protocol["checkpoint"]["name"]
-    checkpoint_file = _resolve_checkpoint_file(cache_root, checkpoint_name)
+    if checkpoint_path is not None:
+        if checkpoint_name is not None:
+            raise ValueError("Pass either checkpoint_name or checkpoint_path, not both.")
+        checkpoint_name, checkpoint_file, checkpoint_cache_dir = (
+            _resolve_local_export_checkpoint(checkpoint_path)
+        )
+        checkpoint_source = "local_export"
+    else:
+        checkpoint_name = checkpoint_name or protocol["checkpoint"]["name"]
+        checkpoint_file = _resolve_checkpoint_file(cache_root, checkpoint_name)
+        checkpoint_cache_dir = cache_root
+        checkpoint_source = "stable_worldmodel_cache"
     checkpoint_sha256 = _sha256(checkpoint_file)
     expected_checkpoint_hash = protocol["checkpoint"].get("sha256")
     if expected_checkpoint_hash and checkpoint_sha256 != expected_checkpoint_hash:
@@ -219,6 +295,7 @@ def evaluate_official_lewm(
     dataset_cfg = protocol["dataset"]
     dataset = swm.data.load_dataset(
         str(dataset_path),
+        format=dataset_source["format"],
         keys_to_load=list(dataset_cfg["keys_to_load"]),
     )
     actual_episodes = len(dataset.lengths)
@@ -255,14 +332,15 @@ def evaluate_official_lewm(
         "protocol": protocol,
         "protocol_path": str(Path(protocol_path).resolve()),
         "dataset": {
-            "path": str(dataset_path),
-            "size_bytes": actual_size,
+            **dataset_source,
             "episodes": actual_episodes,
             "transitions": actual_transitions,
         },
         "checkpoint": {
             "name": checkpoint_name,
             "path": str(checkpoint_file),
+            "cache_dir": str(checkpoint_cache_dir),
+            "source": checkpoint_source,
             "sha256": checkpoint_sha256,
         },
         "selection": selection,
@@ -301,7 +379,9 @@ def evaluate_official_lewm(
         }
         _write_json(action_stats_path, action_stats)
 
-    model = swm.wm.load_pretrained(checkpoint_name).to("cuda").eval()
+    model = swm.wm.load_pretrained(
+        checkpoint_name, cache_dir=str(checkpoint_cache_dir)
+    ).to("cuda").eval()
     model.requires_grad_(False)
     expected_parameters = protocol["checkpoint"].get("parameters")
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
