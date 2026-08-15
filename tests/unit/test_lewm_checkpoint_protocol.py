@@ -22,6 +22,8 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
             protocol["planning"]["executed_environment_steps_before_replanning"],
             25,
         )
+        self.assertEqual(protocol["dataset"]["lance"]["image_codec"], "jpeg")
+        self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
 
     def test_trained_lance_protocol_is_valid(self):
         protocol = load_protocol(

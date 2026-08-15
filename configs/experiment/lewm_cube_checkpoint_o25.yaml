@@ -17,9 +17,14 @@ dataset:
   identifier: quentinll/lewm-cube
   file: ogbench/cube_single_expert.h5
   expected_size_bytes: 101942558720
+  accepted_size_bytes: [101942558720, 74104077358]
   expected_episodes: 10000
   expected_transitions: 2010000
   episode_steps: 201
+  lance:
+    manifest_suffix: .manifest.json
+    image_codec: jpeg
+    jpeg_quality: 100
   keys_to_load:
     - pixels
     - action
