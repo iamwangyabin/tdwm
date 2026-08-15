@@ -16,6 +16,7 @@ import yaml
 
 from tdwm.adapters import prepare_cloud_runtime
 from tdwm.training.cube_data import validate_cube_training_dataset
+from tdwm.training.lance_batch import StrideAwareLanceDataset
 
 
 def load_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -72,6 +73,10 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("Training loader prefetch_factor must be positive.")
     if loader.get("validation_workers", loader.get("workers", -1)) < 0:
         raise ValueError("Validation loader workers cannot be negative.")
+    if not isinstance(loader.get("stride_aware_lance"), bool):
+        raise ValueError("loader.stride_aware_lance must be true or false.")
+    if not isinstance(loader.get("device_image_preprocessing"), bool):
+        raise ValueError("loader.device_image_preprocessing must be true or false.")
 
     dataset = protocol.get("dataset", {})
     lance = dataset.get("lance", {})
@@ -182,18 +187,27 @@ def _fit_column_stats(dataset: Any, columns: list[str], path: Path) -> dict[str,
 class LeWMTransform:
     """Apply the released image and column preprocessing without spt.data imports."""
 
-    def __init__(self, *, image: dict[str, Any], columns: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        image: dict[str, Any],
+        columns: dict[str, Any],
+        preprocess_images: bool = True,
+    ) -> None:
         import torch
-        from torchvision.transforms import v2 as transforms
 
-        self.image_transform = transforms.Compose(
-            [
-                transforms.ToImage(),
-                transforms.ToDtype(torch.float32, scale=True),
-                transforms.Normalize(mean=image["mean"], std=image["std"]),
-                transforms.Resize(size=image["size"]),
-            ]
-        )
+        self.image_transform = None
+        if preprocess_images:
+            from torchvision.transforms import v2 as transforms
+
+            self.image_transform = transforms.Compose(
+                [
+                    transforms.ToImage(),
+                    transforms.ToDtype(torch.float32, scale=True),
+                    transforms.Normalize(mean=image["mean"], std=image["std"]),
+                    transforms.Resize(size=image["size"]),
+                ]
+            )
         self.column_stats = {
             name: (
                 torch.as_tensor(stats["mean"], dtype=torch.float32),
@@ -203,10 +217,44 @@ class LeWMTransform:
         }
 
     def __call__(self, sample: dict[str, Any]) -> dict[str, Any]:
-        sample["pixels"] = self.image_transform(sample["pixels"])
+        if self.image_transform is not None:
+            sample["pixels"] = self.image_transform(sample["pixels"])
         for name, (mean, scale) in self.column_stats.items():
             sample[name] = (sample[name] - mean) / scale
         return sample
+
+
+def _preprocess_image_batch(
+    pixels: Any,
+    *,
+    mean: Any,
+    std: Any,
+    size: int,
+):
+    """Apply the released LeWM image transform to a batch on its device."""
+
+    import torch
+    import torch.nn.functional as functional
+
+    if pixels.dtype != torch.uint8:
+        raise TypeError(
+            "Device-side image preprocessing expects uint8 dataset pixels."
+        )
+    if pixels.ndim != 5 or pixels.shape[2] != 3:
+        raise ValueError("Expected pixels with shape (batch, time, 3, height, width).")
+    normalized = pixels.to(dtype=torch.float32).div(255.0)
+    normalized = (normalized - mean) / std
+    batch, time, channels, height, width = normalized.shape
+    if height == size and width == size:
+        return normalized
+    resized = functional.interpolate(
+        normalized.reshape(batch * time, channels, height, width),
+        size=(size, size),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
+    return resized.reshape(batch, time, channels, size, size)
 
 
 def _model_config(protocol: dict[str, Any], action_dim: int) -> dict[str, Any]:
@@ -263,7 +311,13 @@ def _model_config(protocol: dict[str, Any], action_dim: int) -> dict[str, Any]:
     }
 
 
-def _build_training_module(world_model: Any, protocol: dict[str, Any], total_steps: int):
+def _build_training_module(
+    world_model: Any,
+    protocol: dict[str, Any],
+    total_steps: int,
+    *,
+    device_image_preprocessing: bool,
+):
     import lightning as pl
     import stable_worldmodel as swm
     import torch
@@ -272,12 +326,36 @@ def _build_training_module(world_model: Any, protocol: dict[str, Any], total_ste
         def __init__(self) -> None:
             super().__init__()
             self.model = world_model
+            self.device_image_preprocessing = device_image_preprocessing
+            if device_image_preprocessing:
+                image = protocol["image_preprocessing"]
+                self.register_buffer(
+                    "image_mean",
+                    torch.tensor(image["mean"], dtype=torch.float32).reshape(
+                        1, 1, 3, 1, 1
+                    ),
+                    persistent=False,
+                )
+                self.register_buffer(
+                    "image_std",
+                    torch.tensor(image["std"], dtype=torch.float32).reshape(
+                        1, 1, 3, 1, 1
+                    ),
+                    persistent=False,
+                )
             sigreg = protocol["loss"]["sigreg"]
             self.sigreg = swm.wm.SIGReg(
                 knots=sigreg["knots"], num_proj=sigreg["num_projections"]
             )
 
         def _forward_loss(self, batch: dict[str, Any], stage: str):
+            if self.device_image_preprocessing:
+                batch["pixels"] = _preprocess_image_batch(
+                    batch["pixels"],
+                    mean=self.image_mean,
+                    std=self.image_std,
+                    size=protocol["image_preprocessing"]["size"],
+                )
             batch["action"] = torch.nan_to_num(batch["action"], 0.0)
             output = self.model.encode(batch)
             history = protocol["sequence"]["history_frames"]
@@ -435,6 +513,32 @@ def _resolve_loader_runtime(
     }
 
 
+def _resolve_stride_aware_lance(
+    loader_config: dict[str, Any],
+    *,
+    dataset_format: str,
+    override: bool | None = None,
+) -> dict[str, Any]:
+    configured = bool(loader_config["stride_aware_lance"])
+    requested = configured if override is None else override
+    return {
+        "configured": configured,
+        "requested": requested,
+        "effective": requested and dataset_format == "lance",
+        "dataset_format": dataset_format,
+    }
+
+
+def _resolve_device_image_preprocessing(
+    loader_config: dict[str, Any], *, override: bool | None = None
+) -> dict[str, bool]:
+    configured = bool(loader_config["device_image_preprocessing"])
+    return {
+        "configured": configured,
+        "effective": configured if override is None else override,
+    }
+
+
 def _resolve_train_batch_limit(
     *, smoke: bool, max_steps: int | None, train_loader_length: int
 ) -> int | float:
@@ -460,6 +564,8 @@ def train_lewm(
     loader_workers: int | None = None,
     loader_prefetch_factor: int | None = None,
     validation_loader_workers: int | None = None,
+    stride_aware_lance: bool | None = None,
+    device_image_preprocessing: bool | None = None,
     run_label: str | None = None,
 ) -> dict[str, Any]:
     protocol = load_training_protocol(protocol_path)
@@ -508,6 +614,15 @@ def train_lewm(
     pl.seed_everything(seed, workers=True)
     sequence = protocol["sequence"]
     dataset_cfg = protocol["dataset"]
+    loader_cfg = protocol["loader"]
+    stride_loader = _resolve_stride_aware_lance(
+        loader_cfg,
+        dataset_format=dataset_source["format"],
+        override=stride_aware_lance,
+    )
+    device_preprocessing = _resolve_device_image_preprocessing(
+        loader_cfg, override=device_image_preprocessing
+    )
     dataset = swm.data.load_dataset(
         str(dataset_path),
         format=dataset_source["format"],
@@ -536,8 +651,12 @@ def train_lewm(
         output_dir / "column_normalization.json",
     )
     dataset.transform = LeWMTransform(
-        image=protocol["image_preprocessing"], columns=statistics
+        image=protocol["image_preprocessing"],
+        columns=statistics,
+        preprocess_images=not device_preprocessing["effective"],
     )
+    if stride_loader["effective"]:
+        dataset = StrideAwareLanceDataset(dataset)
 
     generator = torch.Generator().manual_seed(seed)
     train_set, validation_set = torch.utils.data.random_split(
@@ -554,7 +673,6 @@ def train_lewm(
         np.asarray(validation_set.indices, dtype=np.int64),
     )
 
-    loader_cfg = protocol["loader"]
     loader_runtime = _resolve_loader_runtime(
         loader_cfg,
         smoke=smoke,
@@ -603,7 +721,12 @@ def train_lewm(
     total_steps = min(2, len(train_loader)) if smoke else formal_steps
     if max_steps is not None:
         total_steps = int(train_batch_limit)
-    module = _build_training_module(world_model, protocol, total_steps)
+    module = _build_training_module(
+        world_model,
+        protocol,
+        total_steps,
+        device_image_preprocessing=device_preprocessing["effective"],
+    )
     checkpoint_dir = run_dir / "checkpoints" / "lightning"
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
@@ -665,6 +788,13 @@ def train_lewm(
             "formal_optimizer_steps": formal_steps,
             "configured_optimizer_steps": total_steps,
             "loader_runtime": loader_runtime,
+            "stride_aware_lance": {
+                **stride_loader,
+                "upstream_fetched_rows_per_clip": sequence["num_steps"]
+                * sequence["frame_skip"],
+                "stride_fetched_image_rows_per_clip": sequence["num_steps"],
+            },
+            "device_image_preprocessing": device_preprocessing,
             "max_steps": max_steps,
             "skip_validation": skip_validation,
             "resume_mode": resume,

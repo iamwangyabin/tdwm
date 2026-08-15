@@ -4,7 +4,9 @@ from pathlib import Path
 from tdwm.training.lewm import (
     load_training_protocol,
     _resolve_train_batch_limit,
+    _resolve_device_image_preprocessing,
     _resolve_loader_runtime,
+    _resolve_stride_aware_lance,
     validate_training_protocol,
 )
 
@@ -27,6 +29,8 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["loader"]["workers"], 6)
         self.assertEqual(protocol["loader"]["prefetch_factor"], 1)
         self.assertEqual(protocol["loader"]["validation_workers"], 0)
+        self.assertTrue(protocol["loader"]["stride_aware_lance"])
+        self.assertTrue(protocol["loader"]["device_image_preprocessing"])
         self.assertEqual(protocol["logging"]["type"], "csv")
         self.assertEqual(protocol["logging"]["flush_every_n_steps"], 50)
 
@@ -99,6 +103,43 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "flush after a positive"):
             validate_training_protocol(protocol)
+
+    def test_stride_aware_loader_only_activates_for_lance(self):
+        loader_config = {"stride_aware_lance": True}
+
+        lance = _resolve_stride_aware_lance(
+            loader_config, dataset_format="lance"
+        )
+        hdf5 = _resolve_stride_aware_lance(
+            loader_config, dataset_format="hdf5"
+        )
+        disabled = _resolve_stride_aware_lance(
+            loader_config, dataset_format="lance", override=False
+        )
+
+        self.assertTrue(lance["effective"])
+        self.assertFalse(hdf5["effective"])
+        self.assertFalse(disabled["effective"])
+
+    def test_stride_aware_loader_flag_must_be_boolean(self):
+        protocol = load_training_protocol(
+            ROOT / "configs/experiment/lewm_cube_train.yaml"
+        )
+        protocol["loader"]["stride_aware_lance"] = "yes"
+
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            validate_training_protocol(protocol)
+
+    def test_device_image_preprocessing_can_be_disabled_for_ab_comparison(self):
+        loader_config = {"device_image_preprocessing": True}
+
+        configured = _resolve_device_image_preprocessing(loader_config)
+        disabled = _resolve_device_image_preprocessing(
+            loader_config, override=False
+        )
+
+        self.assertTrue(configured["effective"])
+        self.assertFalse(disabled["effective"])
 
 
 if __name__ == "__main__":

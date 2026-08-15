@@ -88,6 +88,8 @@ loss:
 
 loader:
   batch_size: 128
+  stride_aware_lance: true
+  device_image_preprocessing: true
   workers: 6
   prefetch_factor: 1
   validation_workers: 0

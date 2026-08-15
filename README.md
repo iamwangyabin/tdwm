@@ -92,3 +92,29 @@ done
   快速数据变体，不能和原始像素结果混写。
 - 数据不进入镜像或 RAM。平台数据集负责长期保存，`$GEMINI_DATA_OUT` 负责持久化
   checkpoint 和结果。
+
+### 本工程的数据路径优化
+
+训练入口默认启用两个只在 TDWM 内部实现、可以独立关闭的优化，不修改已安装的
+`stable-worldmodel`：
+
+- `stride_aware_lance` 只向 Lance 请求 LeWM 实际消费的 4 个观测帧；跨度内的 20 个
+  action 仍完整读取并 reshape，因此样本、loss 和随机 clip 顺序不变。
+- `device_image_preprocessing` 让 loader 保留 `uint8` 图像，Lightning 把 batch 移到
+  GPU 后再执行同一套缩放、ImageNet normalization 和 resize。Cube 原始图像已经是
+  224x224，因此主机内存、worker IPC 和 PCIe 上的像素 payload 从 float32 降为 uint8，
+  即原来的四分之一。
+
+云端正式训练前，用相同 seed 和 100 step 分别测优化路径与原始路径；两个 run 使用
+独立目录，训练 manifest 会记录实际生效的开关和 loader 参数：
+
+```bash
+python scripts/train.py --seed 3072 --resume never --max-steps 100 \
+  --skip-validation --run-label optimized \
+  --dataset "$TDWM_CUBE_DATASET" --output-dir "$run_dir"
+
+python scripts/train.py --seed 3072 --resume never --max-steps 100 \
+  --skip-validation --run-label upstream-loader \
+  --no-stride-aware-lance --no-device-image-preprocessing \
+  --dataset "$TDWM_CUBE_DATASET" --output-dir "$run_dir"
+```

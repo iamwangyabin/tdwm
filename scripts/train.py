@@ -47,6 +47,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--loader-prefetch-factor", type=int)
     parser.add_argument("--validation-loader-workers", type=int)
     parser.add_argument(
+        "--stride-aware-lance",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Fetch only frames consumed by the LeWM stride when reading Lance; "
+            "enabled by the locked Cube protocol."
+        ),
+    )
+    parser.add_argument(
+        "--device-image-preprocessing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Transfer compact uint8 images and apply the released normalization "
+            "and resize on the accelerator."
+        ),
+    )
+    parser.add_argument(
         "--run-label",
         help="Append a label to the seed output directory for a separate controlled run.",
     )
@@ -72,6 +90,8 @@ def main() -> None:
         loader_workers=args.loader_workers,
         loader_prefetch_factor=args.loader_prefetch_factor,
         validation_loader_workers=args.validation_loader_workers,
+        stride_aware_lance=args.stride_aware_lance,
+        device_image_preprocessing=args.device_image_preprocessing,
         run_label=args.run_label,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
