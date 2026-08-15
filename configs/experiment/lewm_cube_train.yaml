@@ -117,6 +117,8 @@ training:
   epochs: 10
   scheduler_epochs: 10
   precision: bf16-mixed
+  model_compile: true
+  model_compile_mode: reduce-overhead
   gradient_clip_norm: 1.0
   checkpoint_every_epochs: 1
   resume: true

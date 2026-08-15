@@ -65,6 +65,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--compile-model",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Compile LeWM's encode and predict methods with torch.compile; "
+            "enabled by the locked protocol after a controlled Cube A/B."
+        ),
+    )
+    parser.add_argument(
         "--run-label",
         help="Append a label to the seed output directory for a separate controlled run.",
     )
@@ -92,6 +101,7 @@ def main() -> None:
         validation_loader_workers=args.validation_loader_workers,
         stride_aware_lance=args.stride_aware_lance,
         device_image_preprocessing=args.device_image_preprocessing,
+        compile_model=args.compile_model,
         run_label=args.run_label,
     )
     print(json.dumps(result, indent=2, sort_keys=True))

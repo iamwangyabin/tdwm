@@ -57,6 +57,14 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("Scheduler and trainer epochs must remain locked together.")
     if training.get("epochs", 0) <= 0:
         raise ValueError("Training epochs must be positive.")
+    if not isinstance(training.get("model_compile"), bool):
+        raise ValueError("training.model_compile must be true or false.")
+    if training.get("model_compile_mode") not in {
+        "default",
+        "reduce-overhead",
+        "max-autotune",
+    }:
+        raise ValueError("training.model_compile_mode is not supported.")
     if not protocol.get("seeds"):
         raise ValueError("At least one training seed is required.")
 
@@ -539,6 +547,26 @@ def _resolve_device_image_preprocessing(
     }
 
 
+def _resolve_model_compile(
+    training_config: dict[str, Any], *, override: bool | None = None
+) -> dict[str, Any]:
+    configured = bool(training_config["model_compile"])
+    return {
+        "configured": configured,
+        "effective": configured if override is None else override,
+        "mode": training_config["model_compile_mode"],
+    }
+
+
+def _compile_world_model(world_model: Any, *, mode: str) -> None:
+    """Compile only LeWM's two public compute paths, preserving checkpoints."""
+
+    import torch
+
+    world_model.encode = torch.compile(world_model.encode, mode=mode)
+    world_model.predict = torch.compile(world_model.predict, mode=mode)
+
+
 def _resolve_train_batch_limit(
     *, smoke: bool, max_steps: int | None, train_loader_length: int
 ) -> int | float:
@@ -566,6 +594,7 @@ def train_lewm(
     validation_loader_workers: int | None = None,
     stride_aware_lance: bool | None = None,
     device_image_preprocessing: bool | None = None,
+    compile_model: bool | None = None,
     run_label: str | None = None,
 ) -> dict[str, Any]:
     protocol = load_training_protocol(protocol_path)
@@ -622,6 +651,9 @@ def train_lewm(
     )
     device_preprocessing = _resolve_device_image_preprocessing(
         loader_cfg, override=device_image_preprocessing
+    )
+    model_compile = _resolve_model_compile(
+        protocol["training"], override=compile_model
     )
     dataset = swm.data.load_dataset(
         str(dataset_path),
@@ -711,6 +743,8 @@ def train_lewm(
         raise ValueError(
             f"Expected {expected_parameters} parameters, found {parameter_count}."
         )
+    if model_compile["effective"]:
+        _compile_world_model(world_model, mode=model_compile["mode"])
 
     formal_steps = protocol["training"]["scheduler_epochs"] * len(train_loader)
     train_batch_limit = _resolve_train_batch_limit(
@@ -795,6 +829,7 @@ def train_lewm(
                 "stride_fetched_image_rows_per_clip": sequence["num_steps"],
             },
             "device_image_preprocessing": device_preprocessing,
+            "model_compile": model_compile,
             "max_steps": max_steps,
             "skip_validation": skip_validation,
             "resume_mode": resume,

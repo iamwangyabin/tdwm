@@ -1,12 +1,15 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tdwm.training.lewm import (
     load_training_protocol,
     _resolve_train_batch_limit,
     _resolve_device_image_preprocessing,
     _resolve_loader_runtime,
+    _resolve_model_compile,
     _resolve_stride_aware_lance,
+    _compile_world_model,
     validate_training_protocol,
 )
 
@@ -31,6 +34,10 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["loader"]["validation_workers"], 0)
         self.assertTrue(protocol["loader"]["stride_aware_lance"])
         self.assertTrue(protocol["loader"]["device_image_preprocessing"])
+        self.assertTrue(protocol["training"]["model_compile"])
+        self.assertEqual(
+            protocol["training"]["model_compile_mode"], "reduce-overhead"
+        )
         self.assertEqual(protocol["logging"]["type"], "csv")
         self.assertEqual(protocol["logging"]["flush_every_n_steps"], 50)
 
@@ -140,6 +147,42 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
 
         self.assertTrue(configured["effective"])
         self.assertFalse(disabled["effective"])
+
+    def test_model_compile_can_be_enabled_for_a_controlled_comparison(self):
+        training_config = {
+            "model_compile": True,
+            "model_compile_mode": "reduce-overhead",
+        }
+
+        enabled = _resolve_model_compile(training_config)
+        disabled = _resolve_model_compile(training_config, override=False)
+
+        self.assertTrue(enabled["effective"])
+        self.assertFalse(disabled["effective"])
+        self.assertEqual(enabled["mode"], "reduce-overhead")
+
+    def test_compile_wraps_only_lewm_public_compute_methods(self):
+        class Model:
+            def encode(self, batch):
+                return batch
+
+            def predict(self, embedding, action_embedding):
+                return embedding + action_embedding
+
+        model = Model()
+        compiled = []
+
+        def fake_compile(method, *, mode):
+            compiled.append((method.__name__, mode))
+            return method
+
+        with patch("torch.compile", side_effect=fake_compile):
+            _compile_world_model(model, mode="reduce-overhead")
+
+        self.assertEqual(
+            compiled,
+            [("encode", "reduce-overhead"), ("predict", "reduce-overhead")],
+        )
 
 
 if __name__ == "__main__":
