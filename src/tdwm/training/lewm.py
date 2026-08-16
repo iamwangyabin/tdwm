@@ -821,7 +821,7 @@ def train_lewm(
                 batch_size=loader_cfg["batch_size"],
                 block_size=prefetched_blocks["block_size"],
                 drop_last=loader_cfg["train_drop_last"],
-                generator=generator,
+                seed=seed,
                 shuffle_batches_within_block=block_sampler[
                     "shuffle_batches_within_block"
                 ],

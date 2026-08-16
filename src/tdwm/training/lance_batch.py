@@ -266,7 +266,7 @@ class BlockPrefetchBatchDataset(IterableDataset):
         batch_size: int,
         block_size: int,
         drop_last: bool,
-        generator: Any,
+        seed: int,
         shuffle_batches_within_block: bool,
     ) -> None:
         if batch_size <= 0:
@@ -280,7 +280,7 @@ class BlockPrefetchBatchDataset(IterableDataset):
         self._batch_size = batch_size
         self._block_size = block_size
         self._drop_last = drop_last
-        self._generator = generator
+        self._seed = int(seed)
         self._shuffle_batches_within_block = shuffle_batches_within_block
 
     def __len__(self) -> int:
@@ -296,7 +296,7 @@ class BlockPrefetchBatchDataset(IterableDataset):
         worker_id = 0 if worker is None else worker.id
         worker_count = 1 if worker is None else worker.num_workers
         if worker is None:
-            schedule_generator = self._generator
+            schedule_generator = torch.Generator().manual_seed(self._seed)
         else:
             # DataLoader derives worker seeds from its checkpointed generator.
             # Removing the worker offset makes every worker build the same

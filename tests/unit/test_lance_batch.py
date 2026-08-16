@@ -172,7 +172,7 @@ class StrideAwareLanceDatasetTest(unittest.TestCase):
             batch_size=2,
             block_size=4,
             drop_last=False,
-            generator=torch.Generator().manual_seed(7),
+            seed=7,
             shuffle_batches_within_block=True,
         )
 
@@ -194,7 +194,7 @@ class StrideAwareLanceDatasetTest(unittest.TestCase):
             batch_size=2,
             block_size=4,
             drop_last=False,
-            generator=torch.Generator().manual_seed(7),
+            seed=7,
             shuffle_batches_within_block=True,
         )
 
