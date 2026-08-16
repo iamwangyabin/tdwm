@@ -1,9 +1,11 @@
 import unittest
 from io import BytesIO
+from unittest.mock import patch
 
 import numpy as np
 
 from tdwm.training.lance_batch import (
+    BlockPrefetchBatchDataset,
     StrideAwareLanceDataset,
     build_stride_batch_plan,
 )
@@ -96,6 +98,7 @@ class StrideAwareLanceDatasetTest(unittest.TestCase):
                 Image.fromarray(array).save(buffer, format="JPEG", quality=100)
                 self.pixels.append(buffer.getvalue())
             self.requested_rows = None
+            self.row_requests = 0
             self.transform_calls = 0
             self.transform = self._transform
 
@@ -104,6 +107,7 @@ class StrideAwareLanceDatasetTest(unittest.TestCase):
 
         def get_row_data(self, rows):
             self.requested_rows = list(rows)
+            self.row_requests += 1
             return {
                 "pixels": np.asarray([self.pixels[row] for row in rows], dtype=object),
                 "action": self.action[rows],
@@ -142,6 +146,87 @@ class StrideAwareLanceDatasetTest(unittest.TestCase):
             samples[1]["observation"],
             torch.tensor(source.observation[[2, 4, 6]]) + 1,
         )
+
+    def test_prefetched_block_decodes_once_and_materializes_selected_clips(self):
+        source = self.FakeLanceDataset()
+        dataset = StrideAwareLanceDataset(source)
+
+        prefetched = dataset.prefetch([0, 1, 2, 3])
+        first_batch = dataset.materialize_prefetched(prefetched, [0, 1])
+        second_batch = dataset.materialize_prefetched(prefetched, [2, 3])
+
+        self.assertEqual(source.row_requests, 1)
+        self.assertEqual(source.transform_calls, 4)
+        self.assertEqual(tuple(first_batch[0]["pixels"].shape), (3, 3, 8, 8))
+        torch.testing.assert_close(
+            second_batch[1]["action"],
+            torch.tensor(source.action[3:9]).reshape(3, 4),
+        )
+
+    def test_block_prefetch_yields_every_source_clip_once(self):
+        source = self.FakeLanceDataset()
+        dataset = StrideAwareLanceDataset(source)
+        batches = BlockPrefetchBatchDataset(
+            dataset,
+            [4, 0, 3, 1, 2],
+            batch_size=2,
+            block_size=4,
+            drop_last=False,
+            generator=torch.Generator().manual_seed(7),
+            shuffle_batches_within_block=True,
+        )
+
+        emitted = list(batches)
+
+        self.assertEqual(len(emitted), 3)
+        self.assertEqual(source.row_requests, 2)
+        starts = []
+        for batch in emitted:
+            starts.extend(batch["pixels"][:, 0, 0, 0, 0].tolist())
+        self.assertEqual(sorted(starts), [0, 20, 40, 60, 80])
+
+    def test_block_prefetch_partitions_blocks_across_workers(self):
+        source = self.FakeLanceDataset()
+        dataset = StrideAwareLanceDataset(source)
+        batches = BlockPrefetchBatchDataset(
+            dataset,
+            [4, 0, 3, 1, 2],
+            batch_size=2,
+            block_size=4,
+            drop_last=False,
+            generator=torch.Generator().manual_seed(7),
+            shuffle_batches_within_block=True,
+        )
+
+        class Worker:
+            def __init__(self, worker_id):
+                self.id = worker_id
+                self.num_workers = 2
+                self.seed = 11 + worker_id
+
+        def collate_in_test(samples):
+            return {
+                name: torch.stack([sample[name] for sample in samples])
+                for name in samples[0]
+            }
+
+        with (
+            patch("torch.utils.data.get_worker_info", return_value=Worker(0)),
+            patch("torch.utils.data.default_collate", side_effect=collate_in_test),
+        ):
+            first_worker = list(batches)
+        with (
+            patch("torch.utils.data.get_worker_info", return_value=Worker(1)),
+            patch("torch.utils.data.default_collate", side_effect=collate_in_test),
+        ):
+            second_worker = list(batches)
+        emitted = first_worker + second_worker
+
+        self.assertEqual(len(emitted), 3)
+        starts = []
+        for batch in emitted:
+            starts.extend(batch["pixels"][:, 0, 0, 0, 0].tolist())
+        self.assertEqual(sorted(starts), [0, 20, 40, 60, 80])
 
 
 if __name__ == "__main__":

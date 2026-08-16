@@ -6,6 +6,7 @@ from tdwm.training.lewm import (
     load_training_protocol,
     _resolve_train_batch_limit,
     _resolve_device_image_preprocessing,
+    _resolve_block_prefetch,
     _resolve_block_shuffle,
     _resolve_loader_runtime,
     _resolve_model_compile,
@@ -37,6 +38,8 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertTrue(protocol["loader"]["device_image_preprocessing"])
         self.assertFalse(protocol["loader"]["block_shuffle"])
         self.assertEqual(protocol["loader"]["block_size"], 2048)
+        self.assertFalse(protocol["loader"]["block_prefetch"])
+        self.assertEqual(protocol["loader"]["block_prefetch_size"], 512)
         self.assertFalse(protocol["training"]["model_compile"])
         self.assertEqual(
             protocol["training"]["model_compile_mode"], "reduce-overhead"
@@ -167,6 +170,22 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertFalse(configured["effective"])
         self.assertTrue(enabled["effective"])
         self.assertEqual(enabled["block_size"], 4096)
+
+    def test_block_prefetch_can_be_enabled_for_a_controlled_comparison(self):
+        loader_config = {
+            "batch_size": 128,
+            "block_prefetch": False,
+            "block_prefetch_size": 512,
+        }
+
+        configured = _resolve_block_prefetch(loader_config)
+        enabled = _resolve_block_prefetch(
+            loader_config, override=True, block_size=1024
+        )
+
+        self.assertFalse(configured["effective"])
+        self.assertTrue(enabled["effective"])
+        self.assertEqual(enabled["block_size"], 1024)
 
     def test_model_compile_can_be_enabled_for_a_controlled_comparison(self):
         training_config = {

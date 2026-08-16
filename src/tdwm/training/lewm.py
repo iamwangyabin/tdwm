@@ -17,7 +17,7 @@ import yaml
 from tdwm.adapters import prepare_cloud_runtime
 from tdwm.training.block_sampler import BlockShuffleBatchSampler
 from tdwm.training.cube_data import validate_cube_training_dataset
-from tdwm.training.lance_batch import StrideAwareLanceDataset
+from tdwm.training.lance_batch import BlockPrefetchBatchDataset, StrideAwareLanceDataset
 
 
 def load_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -88,10 +88,18 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("loader.device_image_preprocessing must be true or false.")
     if not isinstance(loader.get("block_shuffle"), bool):
         raise ValueError("loader.block_shuffle must be true or false.")
+    if not isinstance(loader.get("block_prefetch"), bool):
+        raise ValueError("loader.block_prefetch must be true or false.")
     if loader.get("block_size", 0) <= 0:
         raise ValueError("loader.block_size must be positive.")
     if loader["block_size"] % loader["batch_size"]:
         raise ValueError("loader.block_size must be divisible by loader.batch_size.")
+    if loader.get("block_prefetch_size", 0) <= 0:
+        raise ValueError("loader.block_prefetch_size must be positive.")
+    if loader["block_prefetch_size"] % loader["batch_size"]:
+        raise ValueError(
+            "loader.block_prefetch_size must be divisible by loader.batch_size."
+        )
     if not isinstance(loader.get("shuffle_batches_within_block"), bool):
         raise ValueError(
             "loader.shuffle_batches_within_block must be true or false."
@@ -556,6 +564,31 @@ def _resolve_block_shuffle(
     }
 
 
+def _resolve_block_prefetch(
+    loader_config: dict[str, Any],
+    *,
+    override: bool | None = None,
+    block_size: int | None = None,
+) -> dict[str, Any]:
+    configured = bool(loader_config["block_prefetch"])
+    effective_block_size = (
+        int(loader_config["block_prefetch_size"])
+        if block_size is None
+        else block_size
+    )
+    if effective_block_size < int(loader_config["batch_size"]):
+        raise ValueError("block_prefetch_size must be at least loader.batch_size.")
+    if effective_block_size % int(loader_config["batch_size"]):
+        raise ValueError(
+            "block_prefetch_size must be divisible by loader.batch_size."
+        )
+    return {
+        "configured": configured,
+        "effective": configured if override is None else override,
+        "block_size": effective_block_size,
+    }
+
+
 def _resolve_stride_aware_lance(
     loader_config: dict[str, Any],
     *,
@@ -629,6 +662,8 @@ def train_lewm(
     validation_loader_workers: int | None = None,
     block_shuffle: bool | None = None,
     block_size: int | None = None,
+    block_prefetch: bool | None = None,
+    block_prefetch_size: int | None = None,
     stride_aware_lance: bool | None = None,
     device_image_preprocessing: bool | None = None,
     compile_model: bool | None = None,
@@ -683,6 +718,11 @@ def train_lewm(
     loader_cfg = protocol["loader"]
     block_sampler = _resolve_block_shuffle(
         loader_cfg, override=block_shuffle, block_size=block_size
+    )
+    prefetched_blocks = _resolve_block_prefetch(
+        loader_cfg,
+        override=block_prefetch,
+        block_size=block_prefetch_size,
     )
     stride_loader = _resolve_stride_aware_lance(
         loader_cfg,
@@ -752,6 +792,20 @@ def train_lewm(
         prefetch_factor=loader_prefetch_factor,
         validation_workers=validation_loader_workers,
     )
+    if prefetched_blocks["effective"]:
+        if not block_sampler["effective"]:
+            raise ValueError("block_prefetch requires block_shuffle to be enabled.")
+        if not stride_loader["effective"]:
+            raise ValueError("block_prefetch requires a Lance stride-aware loader.")
+        if loader_runtime["train"]["workers"] == 0:
+            raise ValueError("block_prefetch requires at least one loader worker.")
+        # Each newly seeded worker must build the same global block schedule
+        # before taking its disjoint share.  Keeping workers alive would reuse
+        # their initial seed and repeat the schedule on every epoch.
+        loader_runtime["train"]["persistent_workers"] = False
+        loader_runtime["train"]["persistent_workers_disabled_reason"] = (
+            "block_prefetch_reseeds_workers_each_epoch"
+        )
     train_loader_kwargs = {
         "num_workers": loader_runtime["train"]["workers"],
         "persistent_workers": loader_runtime["train"]["persistent_workers"],
@@ -759,7 +813,23 @@ def train_lewm(
         "pin_memory": loader_cfg["pin_memory"],
         "generator": generator,
     }
-    if block_sampler["effective"]:
+    if prefetched_blocks["effective"]:
+        train_loader = torch.utils.data.DataLoader(
+            BlockPrefetchBatchDataset(
+                dataset,
+                train_set.indices,
+                batch_size=loader_cfg["batch_size"],
+                block_size=prefetched_blocks["block_size"],
+                drop_last=loader_cfg["train_drop_last"],
+                generator=generator,
+                shuffle_batches_within_block=block_sampler[
+                    "shuffle_batches_within_block"
+                ],
+            ),
+            batch_size=None,
+            **train_loader_kwargs,
+        )
+    elif block_sampler["effective"]:
         train_loader = torch.utils.data.DataLoader(
             train_set,
             batch_sampler=BlockShuffleBatchSampler(
@@ -882,6 +952,7 @@ def train_lewm(
             "configured_optimizer_steps": total_steps,
             "loader_runtime": loader_runtime,
             "block_shuffle": block_sampler,
+            "block_prefetch": prefetched_blocks,
             "stride_aware_lance": {
                 **stride_loader,
                 "upstream_fetched_rows_per_clip": sequence["num_steps"]

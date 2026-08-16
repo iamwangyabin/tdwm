@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 import numpy as np
+from torch.utils.data import IterableDataset
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,17 @@ class StrideBatchPlan:
     @property
     def image_row_requests(self) -> int:
         return len(self.unique_frame_rows)
+
+
+@dataclass(frozen=True)
+class PrefetchedStrideBlock:
+    """Decoded rows shared by several consecutive LeWM mini-batches."""
+
+    global_starts: tuple[int, ...]
+    frame_gathers: tuple[tuple[int, ...], ...]
+    row_data: dict[str, Any]
+    decoded_images: dict[str, Any]
+    dense_actions: Any
 
 
 def build_stride_batch_plan(
@@ -158,9 +170,10 @@ class StrideAwareLanceDataset:
     def __getitem__(self, index: int) -> dict[str, Any]:
         return self.__getitems__([index])[0]
 
-    def __getitems__(self, indices: list[int]) -> list[dict[str, Any]]:
+    def prefetch(self, indices: Sequence[int]) -> PrefetchedStrideBlock:
+        """Read and decode the strided rows needed by a local clip block once."""
         if not indices:
-            return []
+            raise ValueError("Cannot prefetch an empty clip block.")
 
         plan = build_stride_batch_plan(
             clip_indices=self.dataset.clip_indices,
@@ -180,23 +193,44 @@ class StrideAwareLanceDataset:
             name: _decode_images(np.asarray(row_data[name], dtype=object).tolist())
             for name in image_columns
         }
-        dense_actions = self.dataset.get_col_data("action")
+        return PrefetchedStrideBlock(
+            global_starts=plan.global_starts,
+            frame_gathers=plan.frame_gathers,
+            row_data=row_data,
+            decoded_images=decoded_images,
+            dense_actions=self.dataset.get_col_data("action"),
+        )
+
+    def materialize_prefetched(
+        self,
+        prefetched: PrefetchedStrideBlock,
+        positions: Sequence[int],
+    ) -> list[dict[str, Any]]:
+        """Assemble selected clips from an already-decoded local block."""
+
+        image_columns = set(prefetched.decoded_images)
+        block_size = len(prefetched.global_starts)
 
         results: list[dict[str, Any]] = []
-        for global_start, gather in zip(plan.global_starts, plan.frame_gathers):
+        for raw_position in positions:
+            position = int(raw_position)
+            if position < 0 or position >= block_size:
+                raise IndexError(f"Block position {raw_position} is out of range.")
+            global_start = prefetched.global_starts[position]
+            gather = prefetched.frame_gathers[position]
             gather_indices = list(gather)
             steps: dict[str, Any] = {}
             for column in self.dataset.column_names:
                 if column in image_columns:
-                    steps[column] = decoded_images[column][gather_indices]
+                    steps[column] = prefetched.decoded_images[column][gather_indices]
                 elif column == "action":
                     action_end = global_start + int(self.dataset.span)
                     steps[column] = _numeric_tensor(
-                        dense_actions[global_start:action_end]
+                        prefetched.dense_actions[global_start:action_end]
                     )
                 else:
                     steps[column] = _numeric_tensor(
-                        np.asarray(row_data[column])[gather_indices]
+                        np.asarray(prefetched.row_data[column])[gather_indices]
                     )
 
             if self.dataset.transform:
@@ -206,3 +240,95 @@ class StrideAwareLanceDataset:
             )
             results.append(steps)
         return results
+
+    def __getitems__(self, indices: list[int]) -> list[dict[str, Any]]:
+        if not indices:
+            return []
+        prefetched = self.prefetch(indices)
+        return self.materialize_prefetched(prefetched, range(len(indices)))
+
+
+class BlockPrefetchBatchDataset(IterableDataset):
+    """Yield collated LeWM batches from sequentially fetched, decoded blocks.
+
+    The train split is sorted by backing clip index before a block is fetched,
+    so Lance receives one local row request and one JPEG decode pass per block.
+    Mini-batches are shuffled only after that data is resident in the worker's
+    memory.  This keeps the model inputs and sample coverage unchanged while
+    removing the batch-by-batch remote-storage round trips.
+    """
+
+    def __init__(
+        self,
+        dataset: StrideAwareLanceDataset,
+        source_indices: Sequence[int],
+        *,
+        batch_size: int,
+        block_size: int,
+        drop_last: bool,
+        generator: Any,
+        shuffle_batches_within_block: bool,
+    ) -> None:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
+        if block_size < batch_size:
+            raise ValueError("block_size must be at least batch_size.")
+        if block_size % batch_size:
+            raise ValueError("block_size must be divisible by batch_size.")
+        self._dataset = dataset
+        self._source_indices = tuple(sorted(int(index) for index in source_indices))
+        self._batch_size = batch_size
+        self._block_size = block_size
+        self._drop_last = drop_last
+        self._generator = generator
+        self._shuffle_batches_within_block = shuffle_batches_within_block
+
+    def __len__(self) -> int:
+        if self._drop_last:
+            return len(self._source_indices) // self._batch_size
+        return (len(self._source_indices) + self._batch_size - 1) // self._batch_size
+
+    def __iter__(self):
+        import torch
+        from torch.utils.data import default_collate, get_worker_info
+
+        worker = get_worker_info()
+        worker_id = 0 if worker is None else worker.id
+        worker_count = 1 if worker is None else worker.num_workers
+        if worker is None:
+            schedule_generator = self._generator
+        else:
+            # DataLoader derives worker seeds from its checkpointed generator.
+            # Removing the worker offset makes every worker build the same
+            # global block permutation before taking its disjoint share.
+            schedule_generator = torch.Generator().manual_seed(
+                int(worker.seed) - worker_id
+            )
+
+        block_starts = list(range(0, len(self._source_indices), self._block_size))
+        if len(block_starts) > 1:
+            order = torch.randperm(
+                len(block_starts), generator=schedule_generator
+            ).tolist()
+            block_starts = [block_starts[position] for position in order]
+
+        for block_start in block_starts[worker_id::worker_count]:
+            source_block = self._source_indices[
+                block_start : block_start + self._block_size
+            ]
+            prefetched = self._dataset.prefetch(source_block)
+            batches = [
+                list(range(offset, min(offset + self._batch_size, len(source_block))))
+                for offset in range(0, len(source_block), self._batch_size)
+            ]
+            if self._drop_last and batches and len(batches[-1]) != self._batch_size:
+                batches.pop()
+            if self._shuffle_batches_within_block and len(batches) > 1:
+                order = torch.randperm(
+                    len(batches), generator=schedule_generator
+                ).tolist()
+                batches = [batches[position] for position in order]
+            for positions in batches:
+                yield default_collate(
+                    self._dataset.materialize_prefetched(prefetched, positions)
+                )

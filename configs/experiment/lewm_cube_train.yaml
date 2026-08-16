@@ -95,6 +95,8 @@ loader:
   validation_workers: 0
   block_shuffle: false
   block_size: 2048
+  block_prefetch: false
+  block_prefetch_size: 512
   shuffle_batches_within_block: true
   train_shuffle: true
   train_drop_last: true

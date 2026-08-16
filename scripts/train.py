@@ -61,6 +61,20 @@ def parse_args() -> argparse.Namespace:
         help="Clip count per locality block when --block-shuffle is enabled.",
     )
     parser.add_argument(
+        "--block-prefetch",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Read and JPEG-decode a local Lance block before shuffling its "
+            "mini-batches; requires --block-shuffle and loader workers."
+        ),
+    )
+    parser.add_argument(
+        "--block-prefetch-size",
+        type=int,
+        help="Clip count staged in a worker's decoded local block cache.",
+    )
+    parser.add_argument(
         "--stride-aware-lance",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -115,6 +129,8 @@ def main() -> None:
         validation_loader_workers=args.validation_loader_workers,
         block_shuffle=args.block_shuffle,
         block_size=args.block_size,
+        block_prefetch=args.block_prefetch,
+        block_prefetch_size=args.block_prefetch_size,
         stride_aware_lance=args.stride_aware_lance,
         device_image_preprocessing=args.device_image_preprocessing,
         compile_model=args.compile_model,
