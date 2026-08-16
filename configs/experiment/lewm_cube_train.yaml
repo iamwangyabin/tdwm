@@ -93,6 +93,9 @@ loader:
   workers: 6
   prefetch_factor: 1
   validation_workers: 0
+  block_shuffle: false
+  block_size: 2048
+  shuffle_batches_within_block: true
   train_shuffle: true
   train_drop_last: true
   validation_shuffle: false
@@ -117,7 +120,7 @@ training:
   epochs: 10
   scheduler_epochs: 10
   precision: bf16-mixed
-  model_compile: true
+  model_compile: false
   model_compile_mode: reduce-overhead
   gradient_clip_norm: 1.0
   checkpoint_every_epochs: 1

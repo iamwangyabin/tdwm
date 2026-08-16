@@ -47,6 +47,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--loader-prefetch-factor", type=int)
     parser.add_argument("--validation-loader-workers", type=int)
     parser.add_argument(
+        "--block-shuffle",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Group training clips into locality-preserving blocks before "
+            "shuffling; use only for a controlled Cube throughput comparison."
+        ),
+    )
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        help="Clip count per locality block when --block-shuffle is enabled.",
+    )
+    parser.add_argument(
         "--stride-aware-lance",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -70,7 +84,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Compile LeWM's encode and predict methods with torch.compile; "
-            "enabled by the locked protocol after a controlled Cube A/B."
+            "available only for a controlled Cube A/B."
         ),
     )
     parser.add_argument(
@@ -99,6 +113,8 @@ def main() -> None:
         loader_workers=args.loader_workers,
         loader_prefetch_factor=args.loader_prefetch_factor,
         validation_loader_workers=args.validation_loader_workers,
+        block_shuffle=args.block_shuffle,
+        block_size=args.block_size,
         stride_aware_lance=args.stride_aware_lance,
         device_image_preprocessing=args.device_image_preprocessing,
         compile_model=args.compile_model,
