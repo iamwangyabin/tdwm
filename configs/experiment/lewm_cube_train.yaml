@@ -91,8 +91,9 @@ loader:
   stride_aware_lance: true
   device_image_preprocessing: true
   workers: 6
-  prefetch_factor: 1
-  validation_workers: 0
+  prefetch_factor: 2
+  validation_workers: 2
+  validation_locality: true
   block_shuffle: false
   block_size: 2048
   block_prefetch: false

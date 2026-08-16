@@ -41,6 +41,24 @@ class BlockShuffleBatchSamplerTest(unittest.TestCase):
             [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]],
         )
 
+    def test_validation_mode_is_sorted_and_visits_every_source_clip_once(self):
+        source_indices = [11, 0, 9, 1, 10, 2, 8, 3, 7, 4, 6, 5]
+        sampler = BlockShuffleBatchSampler(
+            source_indices,
+            batch_size=3,
+            block_size=6,
+            drop_last=False,
+            shuffle_batches_within_block=False,
+            shuffle_blocks=False,
+        )
+
+        batches = list(sampler)
+
+        self.assertEqual(
+            [[source_indices[index] for index in batch] for batch in batches],
+            [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]],
+        )
+
     def test_seeded_schedule_is_reproducible(self):
         source_indices = list(reversed(range(16)))
         first = BlockShuffleBatchSampler(

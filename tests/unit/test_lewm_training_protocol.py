@@ -32,8 +32,9 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
         self.assertEqual(protocol["dataset"]["lance"]["suffix"], ".lance")
         self.assertEqual(protocol["loader"]["workers"], 6)
-        self.assertEqual(protocol["loader"]["prefetch_factor"], 1)
-        self.assertEqual(protocol["loader"]["validation_workers"], 0)
+        self.assertEqual(protocol["loader"]["prefetch_factor"], 2)
+        self.assertEqual(protocol["loader"]["validation_workers"], 2)
+        self.assertTrue(protocol["loader"]["validation_locality"])
         self.assertTrue(protocol["loader"]["stride_aware_lance"])
         self.assertTrue(protocol["loader"]["device_image_preprocessing"])
         self.assertFalse(protocol["loader"]["block_shuffle"])
@@ -186,6 +187,15 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertFalse(configured["effective"])
         self.assertTrue(enabled["effective"])
         self.assertEqual(enabled["block_size"], 1024)
+
+    def test_validation_locality_flag_must_be_boolean(self):
+        protocol = load_training_protocol(
+            ROOT / "configs/experiment/lewm_cube_train.yaml"
+        )
+        protocol["loader"]["validation_locality"] = "yes"
+
+        with self.assertRaisesRegex(ValueError, "validation_locality"):
+            validate_training_protocol(protocol)
 
     def test_model_compile_can_be_enabled_for_a_controlled_comparison(self):
         training_config = {

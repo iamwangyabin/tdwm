@@ -90,6 +90,8 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("loader.block_shuffle must be true or false.")
     if not isinstance(loader.get("block_prefetch"), bool):
         raise ValueError("loader.block_prefetch must be true or false.")
+    if not isinstance(loader.get("validation_locality"), bool):
+        raise ValueError("loader.validation_locality must be true or false.")
     if loader.get("block_size", 0) <= 0:
         raise ValueError("loader.block_size must be positive.")
     if loader["block_size"] % loader["batch_size"]:
@@ -719,6 +721,7 @@ def train_lewm(
     block_sampler = _resolve_block_shuffle(
         loader_cfg, override=block_shuffle, block_size=block_size
     )
+    validation_locality = bool(loader_cfg["validation_locality"])
     prefetched_blocks = _resolve_block_prefetch(
         loader_cfg,
         override=block_prefetch,
@@ -852,16 +855,33 @@ def train_lewm(
             shuffle=loader_cfg["train_shuffle"],
             **train_loader_kwargs,
         )
-    validation_loader = torch.utils.data.DataLoader(
-        validation_set,
-        batch_size=loader_cfg["batch_size"],
-        num_workers=loader_runtime["validation"]["workers"],
-        drop_last=loader_cfg["validation_drop_last"],
-        persistent_workers=loader_runtime["validation"]["persistent_workers"],
-        prefetch_factor=loader_runtime["validation"]["prefetch_factor"],
-        pin_memory=loader_cfg["pin_memory"],
-        shuffle=loader_cfg["validation_shuffle"],
-    )
+    validation_loader_kwargs = {
+        "num_workers": loader_runtime["validation"]["workers"],
+        "persistent_workers": loader_runtime["validation"]["persistent_workers"],
+        "prefetch_factor": loader_runtime["validation"]["prefetch_factor"],
+        "pin_memory": loader_cfg["pin_memory"],
+    }
+    if validation_locality:
+        validation_loader = torch.utils.data.DataLoader(
+            validation_set,
+            batch_sampler=BlockShuffleBatchSampler(
+                validation_set.indices,
+                batch_size=loader_cfg["batch_size"],
+                block_size=block_sampler["block_size"],
+                drop_last=loader_cfg["validation_drop_last"],
+                shuffle_batches_within_block=False,
+                shuffle_blocks=False,
+            ),
+            **validation_loader_kwargs,
+        )
+    else:
+        validation_loader = torch.utils.data.DataLoader(
+            validation_set,
+            batch_size=loader_cfg["batch_size"],
+            drop_last=loader_cfg["validation_drop_last"],
+            shuffle=loader_cfg["validation_shuffle"],
+            **validation_loader_kwargs,
+        )
 
     action_dim = int(dataset.get_dim("action"))
     model_config = _model_config(protocol, action_dim)
@@ -953,6 +973,10 @@ def train_lewm(
             "loader_runtime": loader_runtime,
             "block_shuffle": block_sampler,
             "block_prefetch": prefetched_blocks,
+            "validation_locality": {
+                "enabled": validation_locality,
+                "order": "source_clip_index" if validation_locality else "subset_order",
+            },
             "stride_aware_lance": {
                 **stride_loader,
                 "upstream_fetched_rows_per_clip": sequence["num_steps"]

@@ -10,8 +10,9 @@ class BlockShuffleBatchSampler:
 
     ``Subset`` indices are commonly a random permutation of the source dataset.
     This sampler returns positions into that subset, grouped by ascending source
-    clip index. Lance therefore sees local row ranges for every batch while the
-    order of blocks and batches is refreshed each epoch.
+    clip index. Lance therefore sees local row ranges for every batch. Training
+    can refresh the order of blocks and batches each epoch; validation can keep
+    that locality order fixed without changing which clips are evaluated.
     """
 
     def __init__(
@@ -21,8 +22,9 @@ class BlockShuffleBatchSampler:
         batch_size: int,
         block_size: int,
         drop_last: bool,
-        generator,
         shuffle_batches_within_block: bool,
+        generator=None,
+        shuffle_blocks: bool = True,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive.")
@@ -36,6 +38,7 @@ class BlockShuffleBatchSampler:
         self._drop_last = drop_last
         self._generator = generator
         self._shuffle_batches_within_block = shuffle_batches_within_block
+        self._shuffle_blocks = shuffle_blocks
         self._positions = tuple(
             sorted(
                 range(len(source_indices)),
@@ -47,7 +50,9 @@ class BlockShuffleBatchSampler:
         import torch
 
         block_starts = list(range(0, len(self._positions), self._block_size))
-        if len(block_starts) > 1:
+        if self._shuffle_blocks and len(block_starts) > 1:
+            if self._generator is None:
+                raise ValueError("A generator is required when shuffling blocks.")
             order = torch.randperm(
                 len(block_starts), generator=self._generator
             ).tolist()
@@ -62,6 +67,10 @@ class BlockShuffleBatchSampler:
             if self._drop_last and batches and len(batches[-1]) != self._batch_size:
                 batches.pop()
             if self._shuffle_batches_within_block and len(batches) > 1:
+                if self._generator is None:
+                    raise ValueError(
+                        "A generator is required when shuffling batches within a block."
+                    )
                 order = torch.randperm(
                     len(batches), generator=self._generator
                 ).tolist()
