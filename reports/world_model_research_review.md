@@ -968,9 +968,11 @@ decoder loss 回传会伤规划。测试从 current history 递归预测，CEM �
 steps-to-goal 或 reachability 监督，正是 train-plan gap。
 
 **实现细节。** frame skip5、batch128；训练 window 为4 frames，每相邻 frame 对应5 primitive
-actions。PushT/Cube history3，TwoRoom history1。CEM 300 candidates/top30；PushT 30 iterations，
-多数其余任务10；model horizon5覆盖25环境步。附录文字称执行完整 optimized sequence 后再
-replan，具体 receding interval 应以 released config 核验（Apps. E-F）。
+actions。PushT/Cube history3，TwoRoom history1。CEM 是300 candidates/top30；发布的 Cube
+evaluator 自身没有覆盖 `solver/cem.yaml` 的30次迭代，故 Cube 也是30而非10；model horizon5
+覆盖25环境步。该 evaluator 的 `plan_config` 未显式设 history length，使用当时框架的默认1帧，
+所以不能把训练 history3 直接等同于测试时一定输入3帧。附录文字称执行完整 optimized sequence
+后再 replan，具体 receding interval 应以 released config 核验（Apps. E-F）。
 
 **结果和消融。** Figure 6 图读值约 TwoRoom/Reacher/PushT/Cube `87/86/96/74`；这些不是统一
 置信区间表。PushT 三 seed 的精确 Table 5：DINO-WM `92±1.63`、PLDM `78±5.00`、LeWM

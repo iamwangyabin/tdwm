@@ -32,6 +32,7 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
         )
         self.assertEqual(protocol["dataset"]["format"], "lance")
         self.assertEqual(protocol["checkpoint"]["epoch"], 10)
+        self.assertEqual(protocol["planning"]["iterations"], 30)
 
     def test_seed3072_lance_protocol_is_valid(self):
         protocol = load_protocol(

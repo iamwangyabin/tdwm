@@ -44,7 +44,9 @@ reward-free、任意目标条件控制。没有先确定 goal-conditioned reward
   每次运行的确切索引；后续方法比较必须复用相应 seed 的索引；
 - 每次评测 50 条轨迹，目标偏移 25 个环境步，执行预算 50 个环境步；
 - world model 统一使用 CEM：300 candidates、30 elites、horizon 5、action block 5；
-- PushT 使用 30 次 CEM 迭代，其他环境使用 10 次；
+- LeWM 发布的 Cube evaluator 继承 `solver/cem.yaml`，使用 30 次 CEM 迭代；其他环境
+  或方法只能在其各自发布协议明确为 10 次时使用 10 次。跨方法比较必须锁定相同的
+  CEM 预算，不能把这一差异伪装成方法收益；
 - world model 训练 10 epochs，符合 LeWM 论文附录中的四环境协议；
 - policy baseline 使用其发布配置的训练预算：GCBC/GCIVL/GCIQL 为 100 epochs；
 - 主要 DINO-WM 结果不使用 proprioception；`DINO-WM+prop` 应作为单独消融，不能
