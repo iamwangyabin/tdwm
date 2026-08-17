@@ -6,6 +6,7 @@ import numpy as np
 
 from tdwm.training.lance_batch import (
     BlockPrefetchBatchDataset,
+    EpisodeStreamingBatchDataset,
     StrideAwareLanceDataset,
     build_stride_batch_plan,
 )
@@ -227,6 +228,119 @@ class StrideAwareLanceDatasetTest(unittest.TestCase):
         for batch in emitted:
             starts.extend(batch["pixels"][:, 0, 0, 0, 0].tolist())
         self.assertEqual(sorted(starts), [0, 20, 40, 60, 80])
+
+
+@unittest.skipUnless(torch is not None and Image is not None, "PyTorch is required")
+class EpisodeStreamingBatchDatasetTest(unittest.TestCase):
+    class FakeEpisodeDataset:
+        def __init__(self, episodes=4, steps=8):
+            self.lengths = np.full(episodes, steps, dtype=np.int64)
+            self.offsets = np.arange(episodes, dtype=np.int64) * steps
+            self.frameskip = 2
+            self.num_steps = 2
+            self.span = 4
+            self.clip_indices = [
+                (episode, start)
+                for episode in range(episodes)
+                for start in range(steps - self.span)
+            ]
+            self.column_names = ["pixels", "action", "observation"]
+            total = episodes * steps
+            self.action = np.arange(total * 2, dtype=np.float32).reshape(total, 2)
+            self.observation = np.arange(total * 3, dtype=np.float32).reshape(total, 3)
+            self.pixels = []
+            for value in range(total):
+                array = np.full((8, 8, 3), value * 5, dtype=np.uint8)
+                buffer = BytesIO()
+                Image.fromarray(array).save(buffer, format="JPEG", quality=100)
+                self.pixels.append(buffer.getvalue())
+            self.row_requests = []
+            self.transform = self._transform
+
+        def __len__(self):
+            return len(self.clip_indices)
+
+        def get_row_data(self, rows):
+            rows = list(rows)
+            self.row_requests.append(rows)
+            return {
+                "pixels": np.asarray([self.pixels[row] for row in rows], dtype=object),
+                "action": self.action[rows],
+                "observation": self.observation[rows],
+            }
+
+        def get_col_data(self, column):
+            if column == "action":
+                return self.action
+            if column == "observation":
+                return self.observation
+            raise KeyError(column)
+
+        @staticmethod
+        def _transform(batch):
+            if batch["action"].shape[-1] != 2:
+                raise AssertionError("Action normalization must precede flattening.")
+            batch["action"] = batch["action"] / 2
+            return batch
+
+    def _stream(self, *, cache_bytes=1024 * 1024):
+        source = self.FakeEpisodeDataset()
+        dataset = EpisodeStreamingBatchDataset(
+            StrideAwareLanceDataset(source),
+            list(range(len(source))),
+            batch_size=4,
+            active_episodes=4,
+            read_episodes=2,
+            cache_bytes=cache_bytes,
+            prefetch_blocks=1,
+            seed=7,
+            drop_last=True,
+            min_unique_episodes=4,
+        )
+        return source, dataset
+
+    def test_reads_contiguous_episode_blocks_and_mixes_every_batch(self):
+        source, dataset = self._stream()
+
+        batches = list(dataset)
+
+        self.assertEqual(len(batches), 4)
+        self.assertEqual(source.row_requests, [list(range(16)), list(range(16, 32))])
+        for batch in batches:
+            self.assertEqual(
+                torch.unique(batch["_tdwm_episode_id"]).numel(), 4
+            )
+            self.assertLessEqual(batch["_tdwm_cache_bytes"], 1024 * 1024)
+            self.assertEqual(tuple(batch["pixels"].shape), (4, 2, 3, 8, 8))
+            self.assertEqual(tuple(batch["action"].shape), (4, 2, 4))
+
+    def test_epoch_schedule_is_reproducible(self):
+        _, first = self._stream()
+        _, second = self._stream()
+        first.set_epoch(3)
+        second.set_epoch(3)
+
+        first_starts = [batch["action"][:, 0, 0].tolist() for batch in first]
+        second_starts = [batch["action"][:, 0, 0].tolist() for batch in second]
+
+        self.assertEqual(first_starts, second_starts)
+
+    def test_later_epoch_rotates_the_sequential_episode_stream(self):
+        first_source, first = self._stream()
+        later_source, later = self._stream()
+        later.set_epoch(3)
+
+        list(first)
+        list(later)
+
+        self.assertEqual(first_source.row_requests[0], list(range(16)))
+        self.assertNotEqual(later_source.row_requests[0], list(range(16)))
+
+    def test_fails_before_training_when_cache_cannot_hold_diverse_pool(self):
+        _, dataset = self._stream(cache_bytes=1)
+
+        with self.assertRaisesRegex(MemoryError, "episode_cache_bytes"):
+            list(dataset)
 
 
 if __name__ == "__main__":

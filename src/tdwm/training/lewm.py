@@ -17,7 +17,11 @@ import yaml
 from tdwm.adapters import prepare_cloud_runtime
 from tdwm.training.block_sampler import BlockShuffleBatchSampler
 from tdwm.training.cube_data import validate_cube_training_dataset
-from tdwm.training.lance_batch import BlockPrefetchBatchDataset, StrideAwareLanceDataset
+from tdwm.training.lance_batch import (
+    BlockPrefetchBatchDataset,
+    EpisodeStreamingBatchDataset,
+    StrideAwareLanceDataset,
+)
 
 
 def load_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -97,6 +101,8 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("loader.block_shuffle must be true or false.")
     if not isinstance(loader.get("block_prefetch"), bool):
         raise ValueError("loader.block_prefetch must be true or false.")
+    if not isinstance(loader.get("episode_streaming"), bool):
+        raise ValueError("loader.episode_streaming must be true or false.")
     if not isinstance(loader.get("validation_locality"), bool):
         raise ValueError("loader.validation_locality must be true or false.")
     if loader.get("block_size", 0) <= 0:
@@ -112,6 +118,26 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
     if not isinstance(loader.get("shuffle_batches_within_block"), bool):
         raise ValueError(
             "loader.shuffle_batches_within_block must be true or false."
+        )
+    if loader.get("episode_pool_size", 0) < loader["batch_size"]:
+        raise ValueError("loader.episode_pool_size must be at least batch_size.")
+    if loader.get("episode_read_size", 0) <= 0:
+        raise ValueError("loader.episode_read_size must be positive.")
+    if loader.get("episode_cache_bytes", 0) <= 0:
+        raise ValueError("loader.episode_cache_bytes must be positive.")
+    if loader.get("episode_prefetch_blocks", 0) <= 0:
+        raise ValueError("loader.episode_prefetch_blocks must be positive.")
+    if not 1 <= loader.get("minimum_unique_episodes_per_batch", 0) <= loader[
+        "batch_size"
+    ]:
+        raise ValueError(
+            "loader.minimum_unique_episodes_per_batch must lie in [1, batch_size]."
+        )
+    if loader["episode_streaming"] and (
+        loader["block_shuffle"] or loader["block_prefetch"]
+    ):
+        raise ValueError(
+            "episode_streaming cannot be combined with block shuffle or prefetch."
         )
 
     dataset = protocol.get("dataset", {})
@@ -385,6 +411,24 @@ def _build_training_module(
             )
 
         def _forward_loss(self, batch: dict[str, Any], stage: str):
+            episode_ids = batch.pop("_tdwm_episode_id", None)
+            cache_bytes = batch.pop("_tdwm_cache_bytes", None)
+            if episode_ids is not None:
+                self.log(
+                    f"{stage}/unique_episodes_per_batch",
+                    torch.unique(episode_ids).numel(),
+                    on_step=stage == "train",
+                    on_epoch=True,
+                    sync_dist=False,
+                )
+            if cache_bytes is not None:
+                self.log(
+                    f"{stage}/compressed_cache_gib",
+                    float(cache_bytes) / 1024**3,
+                    on_step=stage == "train",
+                    on_epoch=True,
+                    sync_dist=False,
+                )
             if self.device_image_preprocessing:
                 batch["pixels"] = _preprocess_image_batch(
                     batch["pixels"],
@@ -487,6 +531,16 @@ def _build_generator_callback(generator: Any):
             generator.set_state(state_dict["generator_state"])
 
     return DataLoaderGeneratorCallback()
+
+
+def _build_episode_epoch_callback(dataset: Any):
+    import lightning as pl
+
+    class EpisodeStreamingEpochCallback(pl.Callback):
+        def on_train_epoch_start(self, trainer, pl_module) -> None:
+            dataset.set_epoch(int(trainer.current_epoch))
+
+    return EpisodeStreamingEpochCallback()
 
 
 def _build_metrics_logger(run_dir: Path, logging_config: dict[str, Any]):
@@ -598,6 +652,34 @@ def _resolve_block_prefetch(
     }
 
 
+def _resolve_episode_streaming(
+    loader_config: dict[str, Any],
+    *,
+    dataset_format: str,
+    smoke: bool,
+    override: bool | None = None,
+) -> dict[str, Any]:
+    configured = bool(loader_config["episode_streaming"])
+    requested = configured if override is None else override
+    batch_size = int(loader_config["batch_size"])
+    pool_size = int(loader_config["episode_pool_size"])
+    if smoke:
+        pool_size = batch_size
+    return {
+        "configured": configured,
+        "requested": requested,
+        "effective": requested and dataset_format == "lance",
+        "dataset_format": dataset_format,
+        "pool_size": pool_size,
+        "read_size": int(loader_config["episode_read_size"]),
+        "cache_bytes": int(loader_config["episode_cache_bytes"]),
+        "prefetch_blocks": int(loader_config["episode_prefetch_blocks"]),
+        "minimum_unique_episodes_per_batch": int(
+            loader_config["minimum_unique_episodes_per_batch"]
+        ),
+    }
+
+
 def _resolve_stride_aware_lance(
     loader_config: dict[str, Any],
     *,
@@ -673,6 +755,7 @@ def train_lewm(
     block_size: int | None = None,
     block_prefetch: bool | None = None,
     block_prefetch_size: int | None = None,
+    episode_streaming: bool | None = None,
     stride_aware_lance: bool | None = None,
     device_image_preprocessing: bool | None = None,
     compile_model: bool | None = None,
@@ -733,6 +816,12 @@ def train_lewm(
         loader_cfg,
         override=block_prefetch,
         block_size=block_prefetch_size,
+    )
+    episode_stream = _resolve_episode_streaming(
+        loader_cfg,
+        dataset_format=dataset_source["format"],
+        smoke=smoke,
+        override=episode_streaming,
     )
     stride_loader = _resolve_stride_aware_lance(
         loader_cfg,
@@ -816,6 +905,24 @@ def train_lewm(
         loader_runtime["train"]["persistent_workers_disabled_reason"] = (
             "block_prefetch_reseeds_workers_each_epoch"
         )
+    if episode_stream["effective"]:
+        if block_sampler["effective"] or prefetched_blocks["effective"]:
+            raise ValueError(
+                "episode streaming cannot be combined with block shuffle or prefetch."
+            )
+        if not stride_loader["effective"]:
+            raise ValueError(
+                "episode streaming requires the Lance stride-aware dataset."
+            )
+        loader_runtime["train"] = {
+            **loader_runtime["train"],
+            "workers": 0,
+            "persistent_workers": False,
+            "prefetch_factor": None,
+            "forced_single_process_reason": (
+                "one bounded cache and one sequential background reader"
+            ),
+        }
     train_loader_kwargs = {
         "num_workers": loader_runtime["train"]["workers"],
         "persistent_workers": loader_runtime["train"]["persistent_workers"],
@@ -823,7 +930,29 @@ def train_lewm(
         "pin_memory": loader_cfg["pin_memory"],
         "generator": generator,
     }
-    if prefetched_blocks["effective"]:
+    episode_train_dataset = None
+    if episode_stream["effective"]:
+        episode_train_dataset = EpisodeStreamingBatchDataset(
+            dataset,
+            train_set.indices,
+            batch_size=loader_cfg["batch_size"],
+            active_episodes=episode_stream["pool_size"],
+            read_episodes=episode_stream["read_size"],
+            cache_bytes=episode_stream["cache_bytes"],
+            prefetch_blocks=episode_stream["prefetch_blocks"],
+            seed=seed,
+            drop_last=loader_cfg["train_drop_last"],
+            min_unique_episodes=episode_stream[
+                "minimum_unique_episodes_per_batch"
+            ],
+        )
+        train_loader = torch.utils.data.DataLoader(
+            episode_train_dataset,
+            batch_size=None,
+            num_workers=0,
+            pin_memory=loader_cfg["pin_memory"],
+        )
+    elif prefetched_blocks["effective"]:
         train_loader = torch.utils.data.DataLoader(
             BlockPrefetchBatchDataset(
                 dataset,
@@ -947,7 +1076,12 @@ def train_lewm(
                 checkpoint_callback,
                 _build_export_callback(run_dir, model_config),
                 _build_generator_callback(generator),
-            ],
+            ]
+            + (
+                [_build_episode_epoch_callback(episode_train_dataset)]
+                if episode_train_dataset is not None
+                else []
+            ),
             log_every_n_steps=1 if smoke else 50,
         )
 
@@ -980,6 +1114,7 @@ def train_lewm(
             "loader_runtime": loader_runtime,
             "block_shuffle": block_sampler,
             "block_prefetch": prefetched_blocks,
+            "episode_streaming": episode_stream,
             "validation_locality": {
                 "enabled": validation_locality,
                 "order": "source_clip_index" if validation_locality else "subset_order",

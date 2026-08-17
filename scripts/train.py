@@ -75,6 +75,15 @@ def parse_args() -> argparse.Namespace:
         help="Clip count staged in a worker's decoded local block cache.",
     )
     parser.add_argument(
+        "--episode-streaming",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Sequentially prefetch compressed Lance episodes into one bounded "
+            "cache while mixing episodes within each training batch."
+        ),
+    )
+    parser.add_argument(
         "--stride-aware-lance",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -131,6 +140,7 @@ def main() -> None:
         block_size=args.block_size,
         block_prefetch=args.block_prefetch,
         block_prefetch_size=args.block_prefetch_size,
+        episode_streaming=args.episode_streaming,
         stride_aware_lance=args.stride_aware_lance,
         device_image_preprocessing=args.device_image_preprocessing,
         compile_model=args.compile_model,

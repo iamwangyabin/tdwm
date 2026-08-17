@@ -6,6 +6,7 @@ from tdwm.training.lewm import (
     load_training_protocol,
     _resolve_train_batch_limit,
     _resolve_device_image_preprocessing,
+    _resolve_episode_streaming,
     _resolve_block_prefetch,
     _resolve_block_shuffle,
     _resolve_loader_runtime,
@@ -42,6 +43,13 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["loader"]["block_size"], 2048)
         self.assertFalse(protocol["loader"]["block_prefetch"])
         self.assertEqual(protocol["loader"]["block_prefetch_size"], 512)
+        self.assertTrue(protocol["loader"]["episode_streaming"])
+        self.assertEqual(protocol["loader"]["episode_pool_size"], 384)
+        self.assertEqual(protocol["loader"]["episode_cache_bytes"], 6 * 1024**3)
+        self.assertEqual(protocol["loader"]["episode_prefetch_blocks"], 16)
+        self.assertEqual(
+            protocol["loader"]["minimum_unique_episodes_per_batch"], 128
+        )
         self.assertFalse(protocol["training"]["model_compile"])
         self.assertEqual(
             protocol["training"]["model_compile_mode"], "reduce-overhead"
@@ -197,6 +205,41 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertFalse(configured["effective"])
         self.assertTrue(enabled["effective"])
         self.assertEqual(enabled["block_size"], 1024)
+
+    def test_episode_streaming_is_lance_only_and_smoke_bounds_the_pool(self):
+        loader_config = {
+            "batch_size": 128,
+            "episode_streaming": True,
+            "episode_pool_size": 384,
+            "episode_read_size": 16,
+            "episode_cache_bytes": 6 * 1024**3,
+            "episode_prefetch_blocks": 1,
+            "minimum_unique_episodes_per_batch": 128,
+        }
+
+        formal = _resolve_episode_streaming(
+            loader_config, dataset_format="lance", smoke=False
+        )
+        smoke = _resolve_episode_streaming(
+            loader_config, dataset_format="lance", smoke=True
+        )
+        hdf5 = _resolve_episode_streaming(
+            loader_config, dataset_format="hdf5", smoke=False
+        )
+
+        self.assertTrue(formal["effective"])
+        self.assertEqual(formal["pool_size"], 384)
+        self.assertEqual(smoke["pool_size"], 128)
+        self.assertFalse(hdf5["effective"])
+
+    def test_episode_streaming_rejects_conflicting_locality_modes(self):
+        protocol = load_training_protocol(
+            ROOT / "configs/experiment/lewm_cube_train.yaml"
+        )
+        protocol["loader"]["block_shuffle"] = True
+
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            validate_training_protocol(protocol)
 
     def test_validation_locality_flag_must_be_boolean(self):
         protocol = load_training_protocol(

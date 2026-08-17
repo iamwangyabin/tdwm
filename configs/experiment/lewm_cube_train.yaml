@@ -99,6 +99,12 @@ loader:
   block_prefetch: false
   block_prefetch_size: 512
   shuffle_batches_within_block: true
+  episode_streaming: true
+  episode_pool_size: 384
+  episode_read_size: 16
+  episode_cache_bytes: 6442450944
+  episode_prefetch_blocks: 16
+  minimum_unique_episodes_per_batch: 128
   train_shuffle: true
   train_drop_last: true
   validation_shuffle: false
