@@ -22,6 +22,7 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
             protocol["planning"]["executed_environment_steps_before_replanning"],
             25,
         )
+        self.assertEqual(protocol["planning"]["iterations"], 30)
         self.assertEqual(protocol["dataset"]["lance"]["image_codec"], "jpeg")
         self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
 
@@ -38,6 +39,7 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
         )
         self.assertEqual(protocol["checkpoint"]["seed"], 3072)
         self.assertEqual(protocol["checkpoint"]["epoch"], 10)
+        self.assertEqual(protocol["planning"]["iterations"], 30)
 
     def test_sampler_is_deterministic_and_respects_goal_offset(self):
         lengths = np.array([10, 12, 8])

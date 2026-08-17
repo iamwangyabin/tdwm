@@ -73,7 +73,8 @@ planning:
   solver: CEM
   horizon: 5
   candidates: 300
-  iterations: 10
+  # The released LeWM Cube evaluator inherits solver/cem.yaml (30 iterations).
+  iterations: 30
   elites: 30
   initial_variance: 1.0
   action_block: 5
