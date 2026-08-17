@@ -69,6 +69,13 @@ def validate_training_protocol(protocol: dict[str, Any]) -> None:
     if not protocol.get("seeds"):
         raise ValueError("At least one training seed is required.")
 
+    scheduler = protocol.get("scheduler", {})
+    if scheduler.get("interval") != "optimizer_step":
+        raise ValueError(
+            "scheduler.interval must be optimizer_step because warmup and "
+            "cosine horizons are measured in optimizer steps."
+        )
+
     logging = protocol.get("logging", {})
     if logging.get("type") != "csv":
         raise ValueError("LeWM training must persist metrics with a CSV logger.")

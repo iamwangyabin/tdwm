@@ -28,6 +28,7 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["split"]["unit"], "sequence_clip")
         self.assertEqual(protocol["training"]["epochs"], 10)
         self.assertEqual(protocol["training"]["scheduler_epochs"], 10)
+        self.assertEqual(protocol["scheduler"]["interval"], "optimizer_step")
         self.assertIn(74104077358, protocol["dataset"]["accepted_size_bytes"])
         self.assertEqual(protocol["dataset"]["lance"]["jpeg_quality"], 100)
         self.assertEqual(protocol["dataset"]["lance"]["suffix"], ".lance")
@@ -54,6 +55,15 @@ class LeWMTrainingProtocolTest(unittest.TestCase):
         )
         protocol["training"]["scheduler_epochs"] = 100
         with self.assertRaisesRegex(ValueError, "remain locked together"):
+            validate_training_protocol(protocol)
+
+    def test_scheduler_interval_must_be_supported(self):
+        protocol = load_training_protocol(
+            ROOT / "configs/experiment/lewm_cube_train.yaml"
+        )
+        protocol["scheduler"]["interval"] = "epoch"
+
+        with self.assertRaisesRegex(ValueError, "scheduler.interval"):
             validate_training_protocol(protocol)
 
     def test_smoke_disables_multiprocess_loader_teardown(self):
