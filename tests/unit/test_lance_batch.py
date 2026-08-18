@@ -250,7 +250,7 @@ class EpisodeStreamingBatchDatasetTest(unittest.TestCase):
             self.observation = np.arange(total * 3, dtype=np.float32).reshape(total, 3)
             self.pixels = []
             for value in range(total):
-                array = np.full((8, 8, 3), value * 5, dtype=np.uint8)
+                array = np.full((8, 8, 3), (value * 5) % 256, dtype=np.uint8)
                 buffer = BytesIO()
                 Image.fromarray(array).save(buffer, format="JPEG", quality=100)
                 self.pixels.append(buffer.getvalue())
