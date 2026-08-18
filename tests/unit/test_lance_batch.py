@@ -342,6 +342,35 @@ class EpisodeStreamingBatchDatasetTest(unittest.TestCase):
         with self.assertRaisesRegex(MemoryError, "episode_cache_bytes"):
             list(dataset)
 
+    def test_tail_fallback_preserves_full_batches_after_sources_end(self):
+        source = self.FakeEpisodeDataset(episodes=6, steps=14)
+        source_indices = [0, 10]
+        source_indices.extend(range(20, 24))
+        source_indices.extend(range(30, 34))
+        source_indices.extend(range(40, 50))
+        source_indices.extend(range(50, 60))
+        dataset = EpisodeStreamingBatchDataset(
+            StrideAwareLanceDataset(source),
+            source_indices,
+            batch_size=4,
+            active_episodes=4,
+            read_episodes=2,
+            cache_bytes=1024 * 1024,
+            prefetch_blocks=1,
+            seed=7,
+            drop_last=True,
+            min_unique_episodes=4,
+        )
+
+        batches = list(dataset)
+
+        self.assertEqual(len(batches), len(source_indices) // 4)
+        unique_counts = [
+            torch.unique(batch["_tdwm_episode_id"]).numel() for batch in batches
+        ]
+        self.assertEqual(unique_counts[:4], [4, 4, 4, 4])
+        self.assertEqual(unique_counts[-3:], [2, 2, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

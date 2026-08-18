@@ -677,36 +677,65 @@ class EpisodeStreamingBatchDataset(IterableDataset):
                 eligible = [
                     episode for episode in active.values() if episode.remaining > 0
                 ]
+                tail_fallback = False
                 if len(eligible) < self._min_unique_episodes:
                     remaining = sum(episode.remaining for episode in eligible)
                     if source_finished and not pending and remaining < self._batch_size:
                         break
-                    raise RuntimeError(
-                        "episode streaming lost batch diversity before exhausting "
-                        f"the epoch: {len(eligible)} active episodes, "
-                        f"{remaining} remaining clips"
-                    )
+                    if source_finished and not pending:
+                        # The final resident episodes may not cover a complete
+                        # batch. Keep all full batches instead of discarding a
+                        # sizeable tail; only this tail may repeat episodes.
+                        tail_fallback = True
+                    else:
+                        raise RuntimeError(
+                            "episode streaming lost batch diversity before "
+                            f"exhausting the epoch: {len(eligible)} active "
+                            f"episodes, {remaining} remaining clips"
+                        )
 
                 shuffled = [eligible[index] for index in rng.permutation(len(eligible))]
                 shuffled.sort(key=lambda episode: episode.remaining, reverse=True)
-                selected_episodes = shuffled[: self._batch_size]
+                selected_episodes = (
+                    shuffled if tail_fallback else shuffled[: self._batch_size]
+                )
                 selections = []
                 for episode in selected_episodes:
                     start = int(episode.starts[episode.cursor])
                     episode.cursor += 1
                     selections.append((episode, start))
 
-                unique_episodes = len(
-                    {episode.episode for episode in selected_episodes}
-                )
-                if unique_episodes < self._min_unique_episodes:
+                while len(selections) < self._batch_size:
+                    candidates = [
+                        episode
+                        for episode in active.values()
+                        if episode.remaining > 0
+                    ]
+                    if not candidates:
+                        raise RuntimeError(
+                            "episode streaming could not fill a tail batch."
+                        )
+                    shuffled_candidates = [
+                        candidates[index]
+                        for index in rng.permutation(len(candidates))
+                    ]
+                    shuffled_candidates.sort(
+                        key=lambda episode: episode.remaining, reverse=True
+                    )
+                    episode = shuffled_candidates[0]
+                    start = int(episode.starts[episode.cursor])
+                    episode.cursor += 1
+                    selections.append((episode, start))
+
+                unique_episodes = len({episode.episode for episode, _ in selections})
+                if not tail_fallback and unique_episodes < self._min_unique_episodes:
                     raise RuntimeError(
                         "episode streaming emitted an insufficiently diverse batch."
                     )
 
                 exhausted = [
-                    episode.episode
-                    for episode in selected_episodes
+                    episode_id
+                    for episode_id, episode in active.items()
                     if episode.remaining == 0
                 ]
                 for episode_id in exhausted:
