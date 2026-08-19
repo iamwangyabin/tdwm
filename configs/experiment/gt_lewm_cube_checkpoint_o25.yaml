@@ -52,6 +52,9 @@ tail_value:
   hidden_dim: 192
   goal_source: n_step_episode_endpoint
 
+model:
+  embed_dim: 192
+
 world:
   env_name: swm/OGBCube-v0
   env_type: single
