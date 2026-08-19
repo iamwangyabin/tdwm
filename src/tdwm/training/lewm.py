@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -15,6 +16,12 @@ import numpy as np
 import yaml
 
 from tdwm.adapters import prepare_cloud_runtime
+from tdwm.methods.goal_tail import (
+    GoalTailValue,
+    discounted_goal_tail_target,
+    goal_tail_loss,
+    soft_update,
+)
 from tdwm.training.block_sampler import BlockShuffleBatchSampler
 from tdwm.training.cube_data import validate_cube_training_dataset
 from tdwm.training.lance_batch import (
@@ -34,16 +41,41 @@ def load_training_protocol(path: str | Path) -> dict[str, Any]:
 def validate_training_protocol(protocol: dict[str, Any]) -> None:
     if protocol.get("schema_version") != 1:
         raise ValueError("The training protocol must use schema_version 1.")
-    if protocol.get("method") != "lewm" or protocol.get("environment") != "cube":
-        raise ValueError("This trainer only accepts original LeWM on OGBench-Cube.")
+    method = protocol.get("method")
+    if method not in {"lewm", "gt_lewm"} or protocol.get("environment") != "cube":
+        raise ValueError("This trainer only accepts LeWM variants on OGBench-Cube.")
     if protocol.get("runtime", {}).get("stable_worldmodel_version") != "0.1.1":
         raise ValueError("LeWM reproduction is locked to stable-worldmodel 0.1.1.")
 
     sequence = protocol.get("sequence", {})
-    if sequence.get("num_steps") != (
-        sequence.get("history_frames", 0) + sequence.get("prediction_frames", 0)
-    ):
-        raise ValueError("num_steps must equal history_frames + prediction_frames.")
+    history_frames = sequence.get("history_frames", 0)
+    prediction_frames = sequence.get("prediction_frames", 0)
+    if method == "lewm":
+        if sequence.get("num_steps") != history_frames + prediction_frames:
+            raise ValueError("num_steps must equal history_frames + prediction_frames.")
+    else:
+        tail = protocol.get("tail_value", {})
+        horizon = tail.get("horizon", 0)
+        if history_frames <= 0 or prediction_frames != 1:
+            raise ValueError(
+                "GT-LeWM requires a positive history and one-step local prediction."
+            )
+        if horizon <= 0 or sequence.get("num_steps") != history_frames + horizon:
+            raise ValueError(
+                "GT-LeWM num_steps must equal history_frames + tail_value.horizon."
+            )
+        if not 0.0 <= tail.get("gamma", -1.0) < 1.0:
+            raise ValueError("GT-LeWM tail_value.gamma must lie in [0, 1).")
+        if tail.get("loss_weight", 0) < 0:
+            raise ValueError("GT-LeWM tail_value.loss_weight cannot be negative.")
+        if not 0.0 < tail.get("target_tau", 0.0) <= 1.0:
+            raise ValueError("GT-LeWM tail_value.target_tau must lie in (0, 1].")
+        if tail.get("hidden_dim", 0) <= 0:
+            raise ValueError("GT-LeWM tail_value.hidden_dim must be positive.")
+        if tail.get("goal_source") != "n_step_episode_endpoint":
+            raise ValueError(
+                "GT-LeWM currently trains against the N-step episode endpoint."
+            )
     if sequence.get("frame_skip", 0) <= 0:
         raise ValueError("frame_skip must be positive.")
 
@@ -494,6 +526,175 @@ def _build_training_module(
     return LeWMTrainingModule()
 
 
+def _build_gt_training_module(
+    world_model: Any,
+    protocol: dict[str, Any],
+    total_steps: int,
+    *,
+    device_image_preprocessing: bool,
+):
+    """Build LeWM plus the goal-conditioned N-step tail-value objective."""
+
+    import lightning as pl
+    import stable_worldmodel as swm
+    import torch
+
+    class GTLeWMTrainingModule(pl.LightningModule):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = world_model
+            self.device_image_preprocessing = device_image_preprocessing
+            if device_image_preprocessing:
+                image = protocol["image_preprocessing"]
+                self.register_buffer(
+                    "image_mean",
+                    torch.tensor(image["mean"], dtype=torch.float32).reshape(
+                        1, 1, 3, 1, 1
+                    ),
+                    persistent=False,
+                )
+                self.register_buffer(
+                    "image_std",
+                    torch.tensor(image["std"], dtype=torch.float32).reshape(
+                        1, 1, 3, 1, 1
+                    ),
+                    persistent=False,
+                )
+            sigreg = protocol["loss"]["sigreg"]
+            self.sigreg = swm.wm.SIGReg(
+                knots=sigreg["knots"], num_proj=sigreg["num_projections"]
+            )
+            tail_config = protocol["tail_value"]
+            embed_dim = protocol["model"]["embed_dim"]
+            self.value = GoalTailValue(
+                embed_dim=embed_dim,
+                hidden_dim=tail_config["hidden_dim"],
+            )
+            self.target_value = copy.deepcopy(self.value)
+            self.target_value.requires_grad_(False)
+            self.gamma = float(tail_config["gamma"])
+            self.target_tau = float(tail_config["target_tau"])
+            self.value_horizon = int(tail_config["horizon"])
+
+        def _log_batch_metadata(self, batch: dict[str, Any], stage: str) -> None:
+            episode_ids = batch.pop("_tdwm_episode_id", None)
+            cache_bytes = batch.pop("_tdwm_cache_bytes", None)
+            if episode_ids is not None:
+                self.log(
+                    f"{stage}/unique_episodes_per_batch",
+                    torch.unique(episode_ids).numel(),
+                    on_step=stage == "train",
+                    on_epoch=True,
+                    sync_dist=False,
+                )
+            if cache_bytes is not None:
+                self.log(
+                    f"{stage}/compressed_cache_gib",
+                    float(cache_bytes) / 1024**3,
+                    on_step=stage == "train",
+                    on_epoch=True,
+                    sync_dist=False,
+                )
+
+        def _forward_loss(self, batch: dict[str, Any], stage: str):
+            self._log_batch_metadata(batch, stage)
+            if self.device_image_preprocessing:
+                batch["pixels"] = _preprocess_image_batch(
+                    batch["pixels"],
+                    mean=self.image_mean,
+                    std=self.image_std,
+                    size=protocol["image_preprocessing"]["size"],
+                )
+            batch["action"] = torch.nan_to_num(batch["action"], 0.0)
+            output = self.model.encode(batch)
+            embeddings = output["emb"]
+            history = protocol["sequence"]["history_frames"]
+            prediction_start = protocol["sequence"]["prediction_frames"]
+            if embeddings.shape[1] < history + self.value_horizon:
+                raise RuntimeError(
+                    "GT-LeWM requires each batch clip to include the full "
+                    "history and tail-value horizon."
+                )
+
+            predicted = self.model.predict(
+                embeddings[:, :history], output["act_emb"][:, :history]
+            )
+            target = embeddings[:, prediction_start : prediction_start + history]
+            prediction_loss = (predicted - target).pow(2).mean()
+            sigreg_loss = self.sigreg(embeddings.transpose(0, 1))
+
+            current = embeddings[:, history - 1]
+            future = embeddings[:, history : history + self.value_horizon]
+            goal = future[:, -1]
+            value_prediction = self.value(current, goal).squeeze(-1)
+            with torch.no_grad():
+                bootstrap = self.target_value(
+                    future[:, -1].detach(), goal.detach()
+                ).squeeze(-1)
+                value_target = discounted_goal_tail_target(
+                    future.detach(),
+                    goal.detach(),
+                    bootstrap,
+                    gamma=self.gamma,
+                )
+            tail_loss = goal_tail_loss(value_prediction, value_target)
+            loss = (
+                prediction_loss
+                + protocol["loss"]["sigreg"]["weight"] * sigreg_loss
+                + protocol["tail_value"]["loss_weight"] * tail_loss
+            )
+            self.log_dict(
+                {
+                    f"{stage}/loss": loss,
+                    f"{stage}/prediction_loss": prediction_loss,
+                    f"{stage}/sigreg_loss": sigreg_loss,
+                    f"{stage}/tail_value_loss": tail_loss,
+                    f"{stage}/tail_value_target": value_target.mean(),
+                },
+                on_step=stage == "train",
+                on_epoch=True,
+                prog_bar=stage != "train",
+                sync_dist=False,
+            )
+            return loss
+
+        def training_step(self, batch: dict[str, Any], batch_idx: int):
+            return self._forward_loss(batch, "train")
+
+        def validation_step(self, batch: dict[str, Any], batch_idx: int):
+            return self._forward_loss(batch, "validation")
+
+        def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
+            soft_update(self.target_value, self.value, tau=self.target_tau)
+
+        def configure_optimizers(self):
+            optimizer_cfg = protocol["optimizer"]
+            optimizer = torch.optim.AdamW(
+                [*self.model.parameters(), *self.value.parameters()],
+                lr=optimizer_cfg["learning_rate"],
+                weight_decay=optimizer_cfg["weight_decay"],
+            )
+            warmup_steps = max(
+                1, int(protocol["scheduler"]["warmup_fraction"] * total_steps)
+            )
+
+            def learning_rate_scale(step: int) -> float:
+                if step < warmup_steps:
+                    return float(step + 1) / float(warmup_steps)
+                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+                return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lr_lambda=learning_rate_scale
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+            }
+
+    return GTLeWMTrainingModule()
+
+
 def _build_export_callback(run_dir: Path, model_config: dict[str, Any]):
     import lightning as pl
     from omegaconf import OmegaConf
@@ -514,6 +715,46 @@ def _build_export_callback(run_dir: Path, model_config: dict[str, Any]):
             )
 
     return ExportPretrainedCallback()
+
+
+def _build_gt_export_callback(
+    run_dir: Path,
+    model_config: dict[str, Any],
+    protocol: dict[str, Any],
+):
+    """Export the standard LeWM weights and the project-owned value head."""
+
+    import lightning as pl
+
+    base_export = _build_export_callback(run_dir, model_config)
+
+    class GTExportPretrainedCallback(pl.Callback):
+        def on_train_epoch_end(self, trainer, pl_module) -> None:
+            if not trainer.is_global_zero:
+                return
+            base_export.on_train_epoch_end(trainer, pl_module)
+            import torch
+
+            export_dir = run_dir / "checkpoints" / "gt_lewm"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            export_path = export_dir / f"epoch_{trainer.current_epoch + 1:02d}.pt"
+            torch.save(
+                {
+                    "value_state_dict": pl_module.value.state_dict(),
+                    "target_value_state_dict": pl_module.target_value.state_dict(),
+                    "value_config": {
+                        "embed_dim": protocol["model"]["embed_dim"],
+                        "hidden_dim": protocol["tail_value"]["hidden_dim"],
+                        "gamma": protocol["tail_value"]["gamma"],
+                        "horizon": protocol["tail_value"]["horizon"],
+                        "target_tau": protocol["tail_value"]["target_tau"],
+                    },
+                    "world_model_config": model_config,
+                },
+                export_path,
+            )
+
+    return GTExportPretrainedCallback()
 
 
 def _build_generator_callback(generator: Any):
@@ -1040,7 +1281,9 @@ def train_lewm(
     total_steps = min(2, len(train_loader)) if smoke else formal_steps
     if max_steps is not None:
         total_steps = int(train_batch_limit)
-    module = _build_training_module(
+    is_gt_lewm = protocol["method"] == "gt_lewm"
+    module_builder = _build_gt_training_module if is_gt_lewm else _build_training_module
+    module = module_builder(
         world_model,
         protocol,
         total_steps,
@@ -1056,6 +1299,11 @@ def train_lewm(
     )
     metrics_logger = _build_metrics_logger(run_dir, protocol["logging"])
     epochs = 1 if smoke or max_steps is not None else protocol["training"]["epochs"]
+    export_callback = (
+        _build_gt_export_callback(run_dir, model_config, protocol)
+        if is_gt_lewm
+        else _build_export_callback(run_dir, model_config)
+    )
     with patch(
         "lightning.pytorch.trainer.connectors.callback_connector._load_external_callbacks",
         return_value=[],
@@ -1074,7 +1322,7 @@ def train_lewm(
             logger=metrics_logger,
             callbacks=[
                 checkpoint_callback,
-                _build_export_callback(run_dir, model_config),
+                export_callback,
                 _build_generator_callback(generator),
             ]
             + (

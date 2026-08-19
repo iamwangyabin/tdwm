@@ -6,12 +6,12 @@ import json
 import os
 from pathlib import Path
 
-from tdwm.training import train_lewm
+from tdwm.training import load_training_protocol, train_lewm
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train original LeWM on OGBench-Cube with a locked protocol."
+        description="Train LeWM or GT-LeWM on OGBench-Cube with a locked protocol."
     )
     parser.add_argument(
         "--config",
@@ -123,7 +123,11 @@ def main() -> None:
         raise SystemExit("Pass --dataset or set TDWM_CUBE_DATASET.")
     output_dir = args.output_dir
     if output_dir is None:
-        output_dir = Path(os.environ.get("TDWM_RUN_ROOT", "outputs")) / "lewm_cube_training"
+        method = load_training_protocol(args.config)["method"]
+        output_name = (
+            "gt_lewm_cube_training" if method == "gt_lewm" else "lewm_cube_training"
+        )
+        output_dir = Path(os.environ.get("TDWM_RUN_ROOT", "outputs")) / output_name
     result = train_lewm(
         protocol_path=args.config,
         dataset_path=args.dataset,

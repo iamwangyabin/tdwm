@@ -42,6 +42,17 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["checkpoint"]["epoch"], 10)
         self.assertEqual(protocol["planning"]["iterations"], 30)
 
+    def test_gt_lewm_protocol_is_valid(self):
+        protocol = load_protocol(
+            ROOT / "configs/experiment/gt_lewm_cube_checkpoint_o25.yaml"
+        )
+        self.assertEqual(protocol["method"], "gt_lewm")
+        self.assertEqual(protocol["tail_value"]["horizon"], 8)
+        self.assertEqual(
+            protocol["planning"]["objective"],
+            "discounted_latent_path_cost_plus_terminal_tail_value",
+        )
+
     def test_sampler_is_deterministic_and_respects_goal_offset(self):
         lengths = np.array([10, 12, 8])
         first = sample_start_goal_pairs(
