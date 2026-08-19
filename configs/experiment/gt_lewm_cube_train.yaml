@@ -95,7 +95,8 @@ loss:
     num_projections: 1024
 
 loader:
-  batch_size: 128
+  # The 11-frame GT-LeWM clip fits on a 24 GiB RTX 3090 at batch size 16.
+  batch_size: 16
   stride_aware_lance: true
   device_image_preprocessing: true
   workers: 6
@@ -112,7 +113,7 @@ loader:
   episode_read_size: 16
   episode_cache_bytes: 6442450944
   episode_prefetch_blocks: 16
-  minimum_unique_episodes_per_batch: 128
+  minimum_unique_episodes_per_batch: 16
   train_shuffle: true
   train_drop_last: true
   validation_shuffle: false
