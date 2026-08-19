@@ -1,0 +1,59 @@
+schema_version: 1
+id: gt_lewm
+display_name: Goal-Tail LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  adapter: tdwm.adapters.gt_lewm.GoalTailLeWM
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+sequence:
+  frameskip: 5
+  history_size: 3
+  num_predictions: 1
+  num_steps: 11
+
+model:
+  encoder:
+    type: vit_tiny
+    pretrained: false
+    patch_size: 14
+    embedding_dimension: 192
+  predictor:
+    depth: 6
+    heads: 16
+    mlp_dimension: 2048
+    head_dimension: 64
+    dropout: 0.1
+  projector:
+    hidden_dimension: 2048
+    normalization: batch_norm_1d
+
+loss:
+  prediction: mse
+  sigreg:
+    weight: 0.09
+    projections: 1024
+    integration_knots: 17
+  goal_tail:
+    weight: 0.1
+    gamma: 0.95
+    horizon: 8
+    target_tau: 0.99
+
+inference:
+  objective: discounted_latent_goal_cost_plus_terminal_value
+  terminal_value: V(z, goal)
+  planning: mpc
+
+provenance:
+  note: The base LeWM model and its anti-collapse SIGReg term remain unchanged; this method adds an independently trained goal-tail value head.
