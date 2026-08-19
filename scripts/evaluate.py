@@ -11,7 +11,7 @@ from tdwm.evaluation import evaluate_official_lewm
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate LeWM or GT-LeWM with Stable World Model."
+        description="Evaluate an official LeWM checkpoint with Stable World Model."
     )
     parser.add_argument(
         "--config",
@@ -32,10 +32,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-path",
         help="Local Stable World Model export directory (for example, epoch_10).",
-    )
-    parser.add_argument(
-        "--value-checkpoint",
-        help="GT-LeWM value-head export written by the training run.",
     )
     parser.add_argument("--video", action="store_true")
     parser.add_argument(
@@ -60,7 +56,6 @@ def main() -> None:
         output_dir=output_dir,
         checkpoint_name=args.checkpoint,
         checkpoint_path=args.checkpoint_path,
-        value_checkpoint_path=args.value_checkpoint,
         video=args.video,
         smoke=args.smoke,
     )

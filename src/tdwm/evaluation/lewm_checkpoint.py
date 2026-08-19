@@ -13,11 +13,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from tdwm.adapters import (
-    GoalTailLeWM,
-    load_goal_tail_value,
-    prepare_cloud_runtime,
-)
+from tdwm.adapters import prepare_cloud_runtime
 
 
 REQUIRED_PLANNING_KEYS = {
@@ -42,8 +38,8 @@ def load_protocol(path: str | Path) -> dict[str, Any]:
 def validate_protocol(protocol: dict[str, Any]) -> None:
     if protocol.get("schema_version") != 1:
         raise ValueError("The experiment protocol must use schema_version 1.")
-    if protocol.get("method") not in {"lewm", "gt_lewm"}:
-        raise ValueError("This evaluator only accepts LeWM variants.")
+    if protocol.get("method") != "lewm":
+        raise ValueError("This evaluator only accepts the original LeWM method.")
     if protocol.get("environment") != "cube":
         raise ValueError("This evaluator only accepts the OGBench-Cube environment.")
 
@@ -63,12 +59,6 @@ def validate_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("Evaluation episodes must be positive.")
     if evaluation.get("goal_offset", 0) <= 0:
         raise ValueError("Goal offset must be positive.")
-    if protocol.get("method") == "gt_lewm":
-        tail = protocol.get("tail_value", {})
-        if not 0.0 <= tail.get("gamma", -1.0) < 1.0:
-            raise ValueError("GT-LeWM tail_value.gamma must lie in [0, 1).")
-        if tail.get("horizon", 0) <= 0:
-            raise ValueError("GT-LeWM tail_value.horizon must be positive.")
 
 
 def sample_start_goal_pairs(
@@ -243,7 +233,6 @@ def evaluate_official_lewm(
     output_dir: str | Path,
     checkpoint_name: str | None = None,
     checkpoint_path: str | Path | None = None,
-    value_checkpoint_path: str | Path | None = None,
     video: bool = False,
     smoke: bool = False,
 ) -> dict[str, Any]:
@@ -291,11 +280,7 @@ def evaluate_official_lewm(
         )
         checkpoint_source = "local_export"
     else:
-        checkpoint_name = checkpoint_name or protocol["checkpoint"].get("name")
-        if checkpoint_name is None:
-            raise ValueError(
-                "A checkpoint name or local checkpoint path is required for evaluation."
-            )
+        checkpoint_name = checkpoint_name or protocol["checkpoint"]["name"]
         checkpoint_file = _resolve_checkpoint_file(cache_root, checkpoint_name)
         checkpoint_cache_dir = cache_root
         checkpoint_source = "stable_worldmodel_cache"
@@ -306,19 +291,6 @@ def evaluate_official_lewm(
             "Checkpoint SHA-256 mismatch: "
             f"expected {expected_checkpoint_hash}, found {checkpoint_sha256}."
         )
-    value_checkpoint_file = None
-    value_checkpoint_sha256 = None
-    if protocol["method"] == "gt_lewm":
-        if value_checkpoint_path is None:
-            raise ValueError(
-                "GT-LeWM evaluation requires a value checkpoint from training."
-            )
-        value_checkpoint_file = Path(value_checkpoint_path).expanduser().resolve()
-        if not value_checkpoint_file.is_file():
-            raise FileNotFoundError(
-                f"GT-LeWM value checkpoint not found: {value_checkpoint_file}"
-            )
-        value_checkpoint_sha256 = _sha256(value_checkpoint_file)
 
     dataset_cfg = protocol["dataset"]
     dataset = swm.data.load_dataset(
@@ -383,11 +355,6 @@ def evaluate_official_lewm(
             "compatibility_adapter": compatibility,
         },
     }
-    if value_checkpoint_file is not None:
-        runtime_manifest["value_checkpoint"] = {
-            "path": str(value_checkpoint_file),
-            "sha256": value_checkpoint_sha256,
-        }
     _write_json(output_dir / "protocol_manifest.json", runtime_manifest)
 
     action_stats_path = output_dir / "action_normalization.json"
@@ -422,17 +389,6 @@ def evaluate_official_lewm(
         raise ValueError(
             f"Expected {expected_parameters} model parameters, found {parameter_count}."
         )
-    if protocol["method"] == "gt_lewm":
-        value, value_config = load_goal_tail_value(
-            value_checkpoint_file, map_location="cuda"
-        )
-        model = GoalTailLeWM(
-            model,
-            value.to("cuda"),
-            gamma=value_config["gamma"],
-            history_size=protocol["context"]["training_history_frames"],
-        ).to("cuda").eval()
-        model.requires_grad_(False)
 
     image_stats = protocol["image_preprocessing"]
     image_transform = transforms.Compose(
