@@ -42,10 +42,11 @@ class GoalTailLeWM(nn.Module):
         action_sequence: torch.Tensor,
         history_size: int | None = None,
     ) -> dict[str, Any]:
+        recurrent_history = history_size or self.history_size
+        if recurrent_history is None:
+            return self.world_model.rollout(info, action_sequence)
         return self.world_model.rollout(
-            info,
-            action_sequence,
-            history_size=history_size or self.history_size,
+            info, action_sequence, history_size=recurrent_history
         )
 
     def criterion(
@@ -60,19 +61,18 @@ class GoalTailLeWM(nn.Module):
 
         if "goal" not in info_dict:
             raise AssertionError("goal not in info_dict")
+        if "pixels" not in info_dict or info_dict["pixels"].ndim < 3:
+            raise ValueError("GT-LeWM requires a time axis in info_dict['pixels'].")
+        observed_frames = int(info_dict["pixels"].shape[2])
         goal_embedding = self._get_goal_embedding(info_dict)
         rollout_info = self.world_model.rollout(info_dict, action_candidates)
         predicted = rollout_info["predicted_emb"]
         if predicted.ndim != 4:
             raise ValueError("LeWM rollout must return (batch, samples, time, dim).")
 
-        history = self.history_size
-        if history is None:
-            history = getattr(self.world_model.predictor, "num_frames", 1)
-        start = min(int(history), predicted.shape[-2] - 1)
-        future = predicted[..., start:, :]
-        if future.shape[-2] == 0:
-            future = predicted[..., -1:, :]
+        if predicted.shape[-2] <= observed_frames:
+            raise ValueError("LeWM rollout did not return any future embeddings.")
+        future = predicted[..., observed_frames:, :]
 
         goal = self._broadcast_goal(goal_embedding, future)
         terminal_value = self.value(future[..., -1, :], goal).squeeze(-1)
@@ -156,7 +156,7 @@ def make_goal_tail_policy(
         world_model,
         value,
         gamma=resolved_gamma,
-        history_size=history_size,
+        history_size=None,
     ).to(device)
     solver = swm.solver.CEMSolver(
         model=wrapped,

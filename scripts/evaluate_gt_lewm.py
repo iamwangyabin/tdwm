@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default="configs/experiment/gt_lewm_cube_checkpoint_o25.yaml",
+        default="configs/experiment/gt_lewm_cube_checkpoint_o50.yaml",
         help="Locked GT-LeWM evaluation protocol YAML.",
     )
     parser.add_argument(
@@ -41,7 +41,9 @@ def main() -> None:
         raise SystemExit("Pass --dataset or set TDWM_CUBE_DATASET.")
     output_dir = args.output_dir
     if output_dir is None:
-        output_dir = Path(os.environ.get("TDWM_RUN_ROOT", "outputs")) / "gt_lewm_cube_o25"
+        output_dir = (
+            Path(os.environ.get("TDWM_RUN_ROOT", "outputs")) / "gt_lewm_cube_o50"
+        )
     result = evaluate_gt_lewm(
         protocol_path=args.config,
         dataset_path=args.dataset,

@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
         "--resume", choices=("auto", "never", "required"), default="auto"
     )
     parser.add_argument("--max-steps", type=int)
+    parser.add_argument("--skip-validation", action="store_true")
     return parser.parse_args()
 
 
@@ -43,7 +44,10 @@ def main() -> None:
         raise SystemExit("Pass --dataset or set TDWM_CUBE_DATASET.")
     output_dir = args.output_dir
     if output_dir is None:
-        output_dir = Path(os.environ.get("TDWM_RUN_ROOT", "outputs")) / "gt_lewm_cube_training"
+        output_dir = (
+            Path(os.environ.get("TDWM_RUN_ROOT", "outputs"))
+            / "gt_lewm_cube_training"
+        )
     result = train_gt_lewm(
         protocol_path=args.config,
         dataset_path=args.dataset,
@@ -52,6 +56,7 @@ def main() -> None:
         smoke=args.smoke,
         resume=args.resume,
         max_steps=args.max_steps,
+        skip_validation=args.skip_validation,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

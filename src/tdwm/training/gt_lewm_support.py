@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,28 @@ def fit_column_stats(dataset: Any, columns: list[str], path: Path) -> dict[str, 
         }
     write_json(path, statistics)
     return statistics
+
+
+def save_split(
+    run_dir: Path, train_indices: np.ndarray, validation_indices: np.ndarray
+) -> dict[str, Any]:
+    """Persist the exact sequence-clip split used by a GT-LeWM run."""
+
+    split_path = run_dir / "split_indices.npz"
+    train = np.asarray(train_indices, dtype=np.int64)
+    validation = np.asarray(validation_indices, dtype=np.int64)
+    np.savez_compressed(
+        split_path,
+        train_indices=train,
+        validation_indices=validation,
+    )
+    return {
+        "path": str(split_path),
+        "train_samples": int(train.size),
+        "validation_samples": int(validation.size),
+        "train_indices_sha256": _array_sha256(train),
+        "validation_indices_sha256": _array_sha256(validation),
+    }
 
 
 class LeWMTransform:
@@ -197,3 +220,12 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _array_sha256(values: np.ndarray) -> str:
+    array = np.ascontiguousarray(values)
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode())
+    digest.update(str(array.shape).encode())
+    digest.update(array.tobytes())
+    return digest.hexdigest()

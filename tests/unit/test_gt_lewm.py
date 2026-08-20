@@ -8,6 +8,8 @@ from tdwm.evaluation.gt_lewm import load_protocol, sample_start_goal_pairs
 from tdwm.methods.goal_tail import (
     GoalTailValue,
     discounted_goal_tail_target,
+    ema_update,
+    future_goal_td_objective,
 )
 from tdwm.training.gt_lewm import load_gt_training_protocol
 
@@ -48,6 +50,7 @@ def test_goal_tail_adapter_scores_path_and_terminal_value():
     predicted = torch.tensor(
         [[[
             [99.0, 99.0],
+            [98.0, 98.0],
             [1.0, 0.0],
             [2.0, 0.0],
             [3.0, 0.0],
@@ -55,7 +58,11 @@ def test_goal_tail_adapter_scores_path_and_terminal_value():
     )
     model = FakeWorldModel(predicted)
     adapter = GoalTailLeWM(model, FixedValue(2.0), gamma=0.5, history_size=1)
-    info = {"goal": torch.zeros(1, 1, 2), "goal_emb": torch.zeros(1, 1, 2)}
+    info = {
+        "pixels": torch.zeros(1, 1, 2, 3, 2, 2),
+        "goal": torch.zeros(1, 1, 2),
+        "goal_emb": torch.zeros(1, 1, 2),
+    }
     actions = torch.zeros(1, 1, 3, 1)
 
     cost = adapter.get_cost(info, actions)
@@ -72,11 +79,14 @@ def test_goal_tail_value_checkpoint_round_trip(tmp_path):
         {
             "value_state_dict": value.state_dict(),
             "value_config": {
+                "objective_version": 2,
                 "embed_dim": 4,
                 "hidden_dim": 6,
                 "gamma": 0.95,
-                "horizon": 8,
-                "target_tau": 0.99,
+                "max_goal_offset": 8,
+                "td_horizon": 4,
+                "target_ema_decay": 0.995,
+                "continuation_policy": "offline_dataset_behavior",
             },
         },
         checkpoint,
@@ -90,22 +100,106 @@ def test_goal_tail_value_checkpoint_round_trip(tmp_path):
 
 
 def test_gt_protocols_are_separate_from_baseline_protocols():
-    train_protocol = load_gt_training_protocol("configs/experiment/gt_lewm_cube_train.yaml")
-    eval_protocol = load_protocol("configs/experiment/gt_lewm_cube_checkpoint_o25.yaml")
+    train_protocol = load_gt_training_protocol(
+        "configs/experiment/gt_lewm_cube_train.yaml"
+    )
+    eval_protocol = load_protocol("configs/experiment/gt_lewm_cube_checkpoint_o50.yaml")
 
     assert train_protocol["method"] == "gt_lewm"
     assert train_protocol["sequence"]["num_steps"] == 11
+    assert train_protocol["tail_value"]["goal_source"] == "all_future_states_in_clip"
+    assert (
+        train_protocol["tail_value"]["continuation_policy"]
+        == "offline_dataset_behavior"
+    )
+    assert (
+        train_protocol["loader"]["batch_size"]
+        * (
+            train_protocol["sequence"]["num_steps"]
+            - train_protocol["sequence"]["history_frames"]
+        )
+        == train_protocol["loss"]["sigreg"]["effective_batch_size"]
+    )
+    assert (
+        train_protocol["training"]["epochs"]
+        * train_protocol["training"]["optimizer_steps_per_epoch"]
+        == 127_960
+    )
     assert eval_protocol["method"] == "gt_lewm"
-    assert eval_protocol["tail_value"]["horizon"] == 8
+    assert eval_protocol["tail_value"]["max_goal_offset"] == 8
+    assert eval_protocol["evaluation"]["goal_offset"] > (
+        eval_protocol["planning"]["horizon"]
+        * eval_protocol["planning"]["action_block"]
+    )
 
 
-def test_start_goal_sampler_is_seeded_and_excludes_final_rank():
+def test_future_goal_td_objective_terminates_at_goal_and_bootstraps_far_goals():
+    latents = torch.arange(4, dtype=torch.float32).reshape(1, 4, 1)
+    value = FixedValue(2.0)
+    target_value = FixedValue(2.0)
+
+    output = future_goal_td_objective(
+        value,
+        target_value,
+        latents,
+        first_current_index=0,
+        max_goal_offset=3,
+        td_horizon=2,
+        gamma=0.5,
+    )
+
+    assert output.pair_count == 6
+    assert torch.allclose(output.td_loss, torch.tensor((4.0 + 2.25 + 0.5625) / 3))
+    assert torch.allclose(output.boundary_loss, torch.tensor(4.0))
+    assert torch.allclose(output.prediction_mean, torch.tensor(2.0))
+    assert torch.allclose(output.target_mean, torch.tensor(0.625))
+
+
+def test_future_goal_td_objective_shapes_the_latent_but_not_target_network():
+    torch.manual_seed(0)
+    latents = torch.randn(2, 5, 3, requires_grad=True)
+    value = GoalTailValue(embed_dim=3, hidden_dim=4)
+    target_value = GoalTailValue(embed_dim=3, hidden_dim=4)
+    target_value.requires_grad_(False)
+
+    output = future_goal_td_objective(
+        value,
+        target_value,
+        latents,
+        first_current_index=1,
+        max_goal_offset=3,
+        td_horizon=2,
+        gamma=0.9,
+    )
+    (output.td_loss + output.boundary_loss).backward()
+
+    assert latents.grad is not None
+    assert torch.count_nonzero(latents.grad) > 0
+    assert all(parameter.grad is None for parameter in target_value.parameters())
+
+
+def test_ema_update_uses_decay_for_the_previous_target():
+    target = nn.Linear(1, 1, bias=False)
+    source = nn.Linear(1, 1, bias=False)
+    with torch.no_grad():
+        target.weight.zero_()
+        source.weight.fill_(10.0)
+
+    ema_update(target, source, decay=0.9)
+
+    assert torch.allclose(target.weight, torch.ones_like(target.weight))
+
+
+def test_start_goal_sampler_is_seeded_and_includes_every_valid_rank():
     first = sample_start_goal_pairs(
-        torch.tensor([5, 5]).numpy(), goal_offset=2, episodes=2, seed=42
+        torch.tensor([5, 5]).numpy(), goal_offset=2, episodes=6, seed=42
     )
     second = sample_start_goal_pairs(
-        torch.tensor([5, 5]).numpy(), goal_offset=2, episodes=2, seed=42
+        torch.tensor([5, 5]).numpy(), goal_offset=2, episodes=6, seed=42
     )
 
-    assert all(torch.equal(torch.as_tensor(left), torch.as_tensor(right)) for left, right in zip(first, second, strict=True))
-    assert int(first[2].max()) < 6
+    assert all(
+        torch.equal(torch.as_tensor(left), torch.as_tensor(right))
+        for left, right in zip(first, second, strict=True)
+    )
+    assert torch.equal(torch.as_tensor(first[2]), torch.arange(6))

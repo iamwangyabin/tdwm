@@ -44,16 +44,22 @@ loss:
     weight: 0.09
     projections: 1024
     integration_knots: 17
+    effective_batch_size: 128
   goal_tail:
-    weight: 0.1
+    objective_version: 2
+    weight: 1.0
+    boundary_weight: 0.1
     gamma: 0.95
-    horizon: 8
-    target_tau: 0.99
+    max_goal_offset: 8
+    td_horizon: 4
+    target_ema_decay: 0.995
+    loss_warmup_fraction: 0.05
+    continuation_policy: offline_dataset_behavior
 
 inference:
-  objective: discounted_latent_goal_cost_plus_terminal_value
-  terminal_value: V(z, goal)
+  objective: short_horizon_latent_cost_plus_bellman_terminal_value
+  terminal_value: V_mu_D(z, goal)
   planning: mpc
 
 provenance:
-  note: The base LeWM model and its anti-collapse SIGReg term remain unchanged; this method adds an independently trained goal-tail value head.
+  note: The base LeWM modules remain separate from the baseline implementation; GT-LeWM trains all local windows with SIGReg and adds a future-goal Bellman value head.

@@ -80,12 +80,17 @@ model:
   projector_hidden_dim: 2048
 
 tail_value:
-  horizon: 8
+  objective_version: 2
+  max_goal_offset: 8
+  td_horizon: 4
   gamma: 0.95
-  loss_weight: 0.1
-  target_tau: 0.99
+  loss_weight: 1.0
+  boundary_loss_weight: 0.1
+  loss_warmup_fraction: 0.05
+  target_ema_decay: 0.995
   hidden_dim: 192
-  goal_source: n_step_episode_endpoint
+  goal_source: all_future_states_in_clip
+  continuation_policy: offline_dataset_behavior
 
 loss:
   prediction: mse
@@ -93,9 +98,10 @@ loss:
     weight: 0.09
     knots: 17
     num_projections: 1024
+    effective_batch_size: 128
 
 loader:
-  # The 11-frame GT-LeWM clip fits on a 24 GiB RTX 3090 at batch size 16.
+  # Eight local windows make the predictor and SIGReg effective batch 128.
   batch_size: 16
   stride_aware_lance: true
   device_image_preprocessing: true
@@ -137,6 +143,8 @@ scheduler:
 training:
   epochs: 10
   scheduler_epochs: 10
+  # Match the audited LeWM Cube run's 127,960 optimizer updates over 10 epochs.
+  optimizer_steps_per_epoch: 12796
   precision: bf16-mixed
   model_compile: false
   model_compile_mode: reduce-overhead
@@ -147,4 +155,4 @@ training:
 provenance:
   base_protocol: configs/experiment/lewm_cube_train.yaml
   released_training_config: https://github.com/lucas-maes/le-wm/tree/main/config/train
-  note: GT-LeWM owns a separate trainer and export; the original LeWM protocol is not edited.
+  note: GT-LeWM owns a separate trainer and export; the original LeWM protocol is not edited. Eight local windows preserve LeWM's effective batch, and the per-epoch optimizer budget preserves its audited Cube update count.

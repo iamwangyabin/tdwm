@@ -26,6 +26,7 @@ REQUIRED_PLANNING_KEYS = {
     "elites",
     "action_block",
     "receding_horizon",
+    "executed_environment_steps_before_replanning",
     "episode_budget",
     "planning_seed",
     "solver_batch_size",
@@ -50,12 +51,18 @@ def validate_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("This evaluator only accepts the OGBench-Cube environment.")
 
     tail = protocol.get("tail_value", {})
-    if tail.get("horizon", 0) <= 0:
-        raise ValueError("GT-LeWM tail horizon must be positive.")
+    if tail.get("objective_version") != 2:
+        raise ValueError("GT-LeWM evaluation requires objective_version 2.")
+    if tail.get("max_goal_offset", 0) <= 0:
+        raise ValueError("GT-LeWM max_goal_offset must be positive.")
+    if not 0 < tail.get("td_horizon", 0) <= tail["max_goal_offset"]:
+        raise ValueError("GT-LeWM td_horizon must lie in [1, max_goal_offset].")
     if not 0.0 <= tail.get("gamma", -1.0) < 1.0:
         raise ValueError("GT-LeWM gamma must lie in [0, 1).")
-    if tail.get("goal_source") != "n_step_episode_endpoint":
-        raise ValueError("GT-LeWM must use its locked endpoint goal source.")
+    if tail.get("goal_source") != "all_future_states_in_clip":
+        raise ValueError("GT-LeWM must use all future goals from each training clip.")
+    if tail.get("continuation_policy") != "offline_dataset_behavior":
+        raise ValueError("GT-LeWM requires the offline dataset behavior tail value.")
 
     planning = protocol.get("planning", {})
     missing = REQUIRED_PLANNING_KEYS - planning.keys()
@@ -67,12 +74,41 @@ def validate_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("Receding horizon cannot exceed the CEM horizon.")
     if planning["horizon"] * planning["action_block"] > planning["episode_budget"]:
         raise ValueError("The planned action sequence exceeds the episode budget.")
+    if planning["action_block"] != planning.get("frame_skip"):
+        raise ValueError(
+            "Each planned action block must match the training frame skip."
+        )
 
     evaluation = protocol.get("evaluation", {})
     if evaluation.get("episodes", 0) <= 0:
         raise ValueError("Evaluation episodes must be positive.")
     if evaluation.get("goal_offset", 0) <= 0:
         raise ValueError("Goal offset must be positive.")
+    planned_environment_steps = planning["horizon"] * planning["action_block"]
+    if (
+        evaluation.get("requires_tail_beyond_planning_horizon", False)
+        and evaluation["goal_offset"] <= planned_environment_steps
+    ):
+        raise ValueError("The long-horizon protocol must place goals beyond the plan.")
+    remaining_goal_steps = max(
+        0, evaluation["goal_offset"] - planned_environment_steps
+    )
+    learned_tail_steps = tail["max_goal_offset"] * planning["frame_skip"]
+    if remaining_goal_steps > learned_tail_steps:
+        raise ValueError("The terminal tail query exceeds its training support.")
+    expected_replan_steps = planning["receding_horizon"] * planning["action_block"]
+    if (
+        planning.get("executed_environment_steps_before_replanning")
+        != expected_replan_steps
+    ):
+        raise ValueError(
+            "The documented replanning interval does not match PlanConfig."
+        )
+    context = protocol.get("context", {})
+    if context.get("predictor_recurrent_window") != context.get(
+        "training_history_frames"
+    ):
+        raise ValueError("Training and recurrent prediction histories must match.")
 
 
 def sample_start_goal_pairs(
@@ -86,14 +122,14 @@ def sample_start_goal_pairs(
     valid_per_episode = np.maximum(lengths - goal_offset, 0)
     cumulative = np.cumsum(valid_per_episode)
     total = int(cumulative[-1]) if cumulative.size else 0
-    if total <= 1:
+    if total <= 0:
         raise ValueError("Dataset has no valid start/goal pairs.")
-    if episodes > total - 1:
+    if episodes > total:
         raise ValueError(
-            f"Requested {episodes} evaluations but only {total - 1} are sampleable."
+            f"Requested {episodes} evaluations but only {total} are sampleable."
         )
     rng = np.random.default_rng(seed)
-    ranks = np.sort(rng.choice(total - 1, size=episodes, replace=False))
+    ranks = np.sort(rng.choice(total, size=episodes, replace=False))
     episode_indices = np.searchsorted(cumulative, ranks, side="right")
     previous = np.where(episode_indices == 0, 0, cumulative[episode_indices - 1])
     start_steps = ranks - previous
@@ -252,14 +288,26 @@ def _validate_value_config(
     value_config: dict[str, Any], protocol: dict[str, Any]
 ) -> None:
     expected = protocol["tail_value"]
+    if int(value_config["objective_version"]) != int(expected["objective_version"]):
+        raise ValueError(
+            "The value checkpoint objective version differs from protocol."
+        )
     if int(value_config["embed_dim"]) != int(protocol["model"]["embed_dim"]):
-        raise ValueError("The value checkpoint embedding dimension differs from protocol.")
+        raise ValueError(
+            "The value checkpoint embedding dimension differs from protocol."
+        )
     if int(value_config["hidden_dim"]) != int(expected["hidden_dim"]):
         raise ValueError("The value checkpoint hidden dimension differs from protocol.")
     if not np.isclose(float(value_config["gamma"]), float(expected["gamma"])):
         raise ValueError("The value checkpoint gamma differs from protocol.")
-    if int(value_config["horizon"]) != int(expected["horizon"]):
-        raise ValueError("The value checkpoint horizon differs from protocol.")
+    if int(value_config["max_goal_offset"]) != int(expected["max_goal_offset"]):
+        raise ValueError("The value checkpoint goal offset differs from protocol.")
+    if int(value_config["td_horizon"]) != int(expected["td_horizon"]):
+        raise ValueError("The value checkpoint TD horizon differs from protocol.")
+    if value_config.get("continuation_policy") != expected["continuation_policy"]:
+        raise ValueError(
+            "The value checkpoint continuation policy differs from protocol."
+        )
 
 
 def evaluate_gt_lewm(
@@ -294,7 +342,9 @@ def evaluate_gt_lewm(
     package_version = importlib.metadata.version("stable-worldmodel")
     expected_version = protocol["runtime"]["stable_worldmodel_version"]
     if package_version != expected_version:
-        raise RuntimeError(f"Expected stable-worldmodel {expected_version}, found {package_version}.")
+        raise RuntimeError(
+            f"Expected stable-worldmodel {expected_version}, found {package_version}."
+        )
 
     cache_root = Path(
         os.environ.get("STABLEWM_HOME", str(Path.home() / ".stable_worldmodel"))
@@ -316,7 +366,8 @@ def evaluate_gt_lewm(
     actual_transitions = int(np.asarray(dataset.lengths).sum())
     if actual_episodes != dataset_cfg["expected_episodes"]:
         raise ValueError(
-            f"Expected {dataset_cfg['expected_episodes']} episodes, found {actual_episodes}."
+            f"Expected {dataset_cfg['expected_episodes']} episodes, "
+            f"found {actual_episodes}."
         )
     if actual_transitions != dataset_cfg["expected_transitions"]:
         raise ValueError(
@@ -343,7 +394,11 @@ def evaluate_gt_lewm(
     action_processor, action_stats = _load_action_processor(
         dataset, output_dir / "action_normalization.json"
     )
-    model = swm.wm.load_pretrained(base_name, cache_dir=str(base_cache)).to("cuda").eval()
+    model = (
+        swm.wm.load_pretrained(base_name, cache_dir=str(base_cache))
+        .to("cuda")
+        .eval()
+    )
     model.requires_grad_(False)
     expected_parameters = protocol["checkpoint"].get("parameters")
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
