@@ -99,6 +99,8 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
 .visual-flow strong { color: rgba(255,255,255,.55); font-size: 18px; }
 .hero-formula { width: min(100%, var(--max)); display: flex; align-items: center; gap: 22px; margin: 42px auto 0; padding-top: 22px; border-top: 1px solid rgba(255,255,255,.2); color: #fff; }
 .formula-tag { color: #c6ef5a; font-size: 11px; font-weight: 800; letter-spacing: 1.3px; white-space: nowrap; }
+.hero-formula > div { min-width: 0; overflow-x: auto; }
+.hero-formula .display-math { padding: 0; color: #fff; }
 
 .content-wide { width: min(100%, var(--max)); margin: 0 auto; }
 .content-wide > *, .history-layout > *, .policy-layout > *, .distance-layout > *, .bellman-layout > *, .successor-steps > *, .sequence-block > *, .planning-flow > *, .cem-grid > *, .loss-grid > *, .audit-list > * { min-width: 0; }
