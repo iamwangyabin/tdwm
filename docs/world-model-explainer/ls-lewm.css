@@ -110,6 +110,10 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
 .intro-band h2, .section-head h2, .closing h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 54px; font-weight: 500; line-height: 1.12; }
 .intro-text { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
 .intro-text p { margin: 0; line-height: 1.85; }
+.unified-section { background: var(--white); }
+.unified-split { align-items: stretch; margin-top: 24px; }
+.unified-split .plain-callout { align-content: center; margin-top: 0; }
+.unified-bellman { margin-top: 24px; }
 
 .section { padding: 108px 24px; scroll-margin-top: 64px; }
 .section.tinted { background: #e8eee3; }

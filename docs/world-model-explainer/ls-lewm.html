@@ -31,6 +31,7 @@
     </a>
     <nav class="top-nav" aria-label="页面目录">
       <a href="#intuition">直觉</a>
+      <a href="#unified-theory">统一理论</a>
       <a href="#symbols">符号</a>
       <a href="#successor">Successor</a>
       <a href="#training">训练</a>
@@ -65,14 +66,11 @@
         <div class="display-math">\[
           \boxed{
             a^*_{t:t+H-1}
-            = \underset{a_{t:t+H-1}}{\arg\min}
-            \left[
-              C_{\mathrm{short}}^{\mathrm{LeWM}}(a_{t:t+H-1})
-              +\gamma^H C_{\mathrm{long}}^{\mathrm{successor}}(a_{t:t+H-1};\pi_\eta)
-            \right]
+            = \underset{a_{t:t+H-1}}{\arg\min}\;
+            J^{\mu_{a,\pi_\eta}}(h_t,z_g)
           }
         \]</div>
-        <p class="hero-formula-note">所有复杂公式，都是在解释这两个代价分别如何计算。</p>
+        <p class="hero-formula-note">\(\mu_{a,\pi_\eta}\) 是一个组合控制器：前 (H) 步执行候选动作，之后由目标策略接着走。</p>
       </div>
     </section>
 
@@ -80,11 +78,61 @@
       <div class="content-wide intro-grid">
         <div>
           <p class="eyebrow dark">先不要记公式</p>
-          <h2>把它想成“短期试路 + 长期导航”。</h2>
+          <h2>一个目标，两种计算方式。</h2>
         </div>
         <div class="intro-text">
           <p>机器人要从当前画面走到目标画面。它可以在脑中试很多条短路线，但模型越往未来预测越容易偏离现实。</p>
-          <p><strong>LS-LeWM 的折中：</strong>前面几步交给可以接受任意候选动作的 LeWM；后面不再逐步想象每个动作，而是交给一个学过离线轨迹的目标策略，并用 successor 把它的长期结果压缩成一个可比较的代价。</p>
+          <p><strong>关键：</strong>短期和长期不是两套理论。它们都是同一个未来累计代价，只是前面几步用 LeWM 逐步计算，后面用 successor 更便宜地估计。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section unified-section" id="unified-theory">
+      <div class="content-wide">
+        <div class="section-head split-head">
+          <div>
+            <p class="eyebrow dark">01 / ONE THEORY</p>
+            <h2>真正统摄整个方法的，是一个未来总和。</h2>
+          </div>
+          <p class="section-lede">这里的 (\mu_{a,\pi_\eta}) 表示：先执行 CEM 提出的动作 prefix，之后交给目标条件策略继续执行。</p>
+        </div>
+        <div class="equation-block major-equation wide-equation">
+          <div class="equation-caption"><span>统一目标</span><span>不是两个 cost，而是一个 return</span></div>
+          <div class="display-math">\[
+            J^{\mu_{a,\pi_\eta}}(h_t,z_g)
+            =(1-\gamma)\,\mathbb{E}_{\mu_{a,\pi_\eta}}\!\left[
+              \sum_{k=0}^{\tau_g-t-1}
+              \gamma^k\,c(z_{t+k+1},z_g)
+              \ \middle|\ h_t,z_g
+            \right]
+          \]</div>
+          <p>它只说一件事：从现在开始，未来每一步离目标有多远，把这些距离按时间折扣后加起来。(c(z,z_g)=\lVert z-z_g\rVert_2^2/D)。</p>
+        </div>
+        <div class="distance-layout unified-split">
+          <div class="equation-block">
+            <div class="equation-caption"><span>同一个总和</span><span>只是从第 (H) 步切开</span></div>
+            <div class="display-math">\[
+              \sum_{k=0}^{\tau_g-t-1}\gamma^k c_{t+k+1}
+              =
+              \underbrace{\sum_{k=0}^{H-1}\gamma^k c_{t+k+1}}_{\text{前 }H\text{ 步}}
+              +
+              \underbrace{\sum_{k=H}^{\tau_g-t-1}\gamma^k c_{t+k+1}}_{\text{剩余未来}}
+            \]</div>
+          </div>
+          <div class="plain-callout unified-callout">
+            <strong>所以 short / long 的区别是什么？</strong>
+            <span>不是目标不同，而是计算器不同：前半段用 LeWM 展开每一步，后半段用 successor 一次性估计剩余总和。</span>
+          </div>
+        </div>
+        <div class="equation-block featured-equation unified-bellman">
+          <div class="equation-caption"><span>同一理论的递归写法</span><span>一步和多步可以互相转换</span></div>
+          <div class="display-math">\[
+            J^\pi(h_t,a_t,z_g)
+            =(1-\gamma)c(z_{t+1},z_g)
+            +\gamma(1-d_{t+1})
+            J^\pi\!\left(h_{t+1},\pi(h_{t+1},z_g),z_g\right)
+          \]</div>
+          <p>这就是 Bellman 递推：总未来代价 = 下一步代价 + 从下一步开始的剩余代价。successor 只是用向量 (G) 表示同一个 (J^\pi)：(J^\pi=w(z_g)^\top G^\pi)。</p>
         </div>
       </div>
     </section>
@@ -92,7 +140,7 @@
     <section class="section" id="problem">
       <div class="content-wide">
         <div class="section-head">
-          <p class="eyebrow dark">01 / PROBLEM SETUP</p>
+          <p class="eyebrow dark">02 / PROBLEM SETUP</p>
           <h2>先把任务说清楚：它到底在预测什么？</h2>
           <p class="section-lede">每一条公式都来自一个具体需要。先从机器人看到什么、能做什么、想去哪里开始。</p>
         </div>
@@ -136,7 +184,7 @@
     <section class="section tinted" id="symbols">
       <div class="content-wide">
         <div class="section-head">
-          <p class="eyebrow dark">02 / LOCAL DYNAMICS</p>
+          <p class="eyebrow dark">03 / LOCAL DYNAMICS</p>
           <h2>为什么要记住历史？</h2>
           <p class="section-lede">同一张图片下，物体可能正在向左运动，也可能正在向右运动。当前画面不一定包含足够的速度信息。</p>
         </div>
@@ -174,7 +222,7 @@
       <div class="content-wide">
         <div class="section-head split-head">
           <div>
-            <p class="eyebrow dark">03 / GOAL DISTANCE</p>
+            <p class="eyebrow dark">04 / GOAL DISTANCE</p>
             <h2>没有奖励时，怎么定义“做得好”？</h2>
           </div>
           <p class="section-lede">当前方法使用 goal-reaching 代价：latent 离目标越近，代价越低。这里的“低”就是好。</p>
@@ -212,7 +260,7 @@
     <section class="section tinted" id="policy">
       <div class="content-wide">
         <div class="section-head">
-          <p class="eyebrow dark">04 / CONTINUATION POLICY</p>
+          <p class="eyebrow dark">05 / CONTINUATION POLICY</p>
           <h2>长期动作从哪里来？</h2>
           <p class="section-lede">如果让 LeWM 永远递归预测，误差会累积。于是方法另外学习一个“给定目标，下一步怎么走”的策略。</p>
         </div>
@@ -244,7 +292,7 @@
       <div class="content-wide">
         <div class="section-head split-head">
           <div>
-            <p class="eyebrow dark">05 / SUCCESSOR FEATURES</p>
+            <p class="eyebrow dark">06 / SUCCESSOR FEATURES</p>
             <h2>为什么 successor 输出一个向量，而不是一个数字？</h2>
           </div>
           <p class="section-lede">目标会变化。向量先总结“未来会访问什么”，目标权重再把它转换成“对这个目标有多远”。</p>
@@ -293,7 +341,7 @@
     <section class="section tinted" id="successor-definition">
       <div class="content-wide">
         <div class="section-head">
-          <p class="eyebrow dark">06 / THE LONG-TERM OBJECT</p>
+          <p class="eyebrow dark">07 / THE LONG-TERM OBJECT</p>
           <h2>Successor 本身到底在预测什么？</h2>
           <p class="section-lede">把“未来很多步的目标距离”拆成“未来很多步的 feature 访问记录”。</p>
         </div>
@@ -328,7 +376,7 @@
       <div class="content-wide">
         <div class="section-head split-head">
           <div>
-            <p class="eyebrow dark">07 / BELLMAN RECURSION</p>
+            <p class="eyebrow dark">08 / BELLMAN RECURSION</p>
             <h2>为什么训练时可以只看一步？</h2>
           </div>
           <p class="section-lede">因为“未来总和”可以拆成“下一步 + 从下一步开始的剩余总和”。这就是 Bellman 递推。</p>
@@ -372,7 +420,7 @@
     <section class="section tinted" id="training">
       <div class="content-wide">
         <div class="section-head">
-          <p class="eyebrow dark">08 / TRAINING OBJECTIVE</p>
+          <p class="eyebrow dark">09 / TRAINING OBJECTIVE</p>
           <h2>这些损失函数分别在教模型什么？</h2>
           <p class="section-lede">LS-LeWM 不是只训练一个 head，而是让局部 world model、successor 和 continuation policy 共同工作。</p>
         </div>
@@ -420,7 +468,7 @@
       <div class="content-wide">
         <div class="section-head split-head">
           <div>
-            <p class="eyebrow dark">09 / MPC INFERENCE</p>
+            <p class="eyebrow dark">10 / MPC INFERENCE</p>
             <h2>最后回到规划：CEM 如何组合 prefix 和 tail？</h2>
           </div>
           <p class="section-lede">CEM 不需要知道 successor 的内部实现，只需要给它候选动作序列的最终代价。</p>
@@ -472,7 +520,7 @@
     <section class="section tinted" id="audit">
       <div class="content-wide">
         <div class="section-head">
-          <p class="eyebrow dark">10 / WHAT TO CHECK</p>
+          <p class="eyebrow dark">11 / WHAT TO CHECK</p>
           <h2>公式闭合，不等于实验已经证明有效</h2>
           <p class="section-lede">数学告诉我们这个方法想表达什么；实验还要检查它是否在真实的模型误差、数据分布和终止语义下成立。</p>
         </div>
