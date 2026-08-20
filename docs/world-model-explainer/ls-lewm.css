@@ -101,6 +101,7 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
 .formula-tag { color: #c6ef5a; font-size: 11px; font-weight: 800; letter-spacing: 1.3px; white-space: nowrap; }
 .hero-formula > div { min-width: 0; overflow-x: auto; }
 .hero-formula .display-math { padding: 0; color: #fff; }
+.hero-formula-note { max-width: 250px; margin: 0; color: rgba(255,255,255,.62); font-size: 12px; line-height: 1.45; }
 
 .content-wide { width: min(100%, var(--max)); margin: 0 auto; }
 .content-wide > *, .history-layout > *, .policy-layout > *, .distance-layout > *, .bellman-layout > *, .successor-steps > *, .sequence-block > *, .planning-flow > *, .cem-grid > *, .loss-grid > *, .audit-list > * { min-width: 0; }
@@ -300,6 +301,7 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
   .hero-meta { display: grid; gap: 8px; }
   .hero-formula { display: block; margin-top: 30px; padding-top: 18px; }
   .hero-formula .formula-tag { display: block; margin-bottom: 12px; }
+  .hero-formula-note { max-width: none; margin-top: 10px; }
   .hero-visual { box-shadow: 10px 10px 0 rgba(235,101,77,.85); }
   .intro-band, .section, .closing { padding: 70px 18px; }
   .intro-band h2, .section-head h2, .closing h2 { font-size: 38px; }

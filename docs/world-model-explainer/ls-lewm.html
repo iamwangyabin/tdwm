@@ -63,15 +63,16 @@
       <div class="hero-formula" aria-label="核心规划公式">
         <span class="formula-tag">CORE IDEA</span>
         <div class="display-math">\[
-          \begin{aligned}
-            J_H(a_{t:t+H-1};h_t,z_g)
-            &= \underbrace{(1-\gamma)\sum_{k=1}^{H}\gamma^{k-1}
-              \frac{\lVert\hat z_{t+k}-z_g\rVert_2^2}{D}}_{\text{LeWM 显式 prefix 代价}} \\
-            &\quad + \underbrace{\gamma^H w(z_g)^\top
-              G\!\left(\hat h_{t+H},
-              \pi_\eta(\hat h_{t+H},z_g),z_g\right)}_{\text{successor policy-conditioned tail}}
-          \end{aligned}
+          \boxed{
+            a^*_{t:t+H-1}
+            = \underset{a_{t:t+H-1}}{\arg\min}
+            \left[
+              C_{\mathrm{short}}^{\mathrm{LeWM}}(a_{t:t+H-1})
+              +\gamma^H C_{\mathrm{long}}^{\mathrm{successor}}(a_{t:t+H-1};\pi_\eta)
+            \right]
+          }
         \]</div>
+        <p class="hero-formula-note">所有复杂公式，都是在解释这两个代价分别如何计算。</p>
       </div>
     </section>
 
