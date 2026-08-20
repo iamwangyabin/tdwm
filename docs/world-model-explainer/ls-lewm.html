@@ -134,6 +134,40 @@
           \]</div>
           <p>这就是 Bellman 递推：总未来代价 = 下一步代价 + 从下一步开始的剩余代价。successor 只是用向量 (G) 表示同一个 (J^\pi)：(J^\pi=w(z_g)^\top G^\pi)。</p>
         </div>
+        <div class="next-step-block">
+          <div class="next-step-header">
+            <div>
+              <p class="eyebrow dark">一个容易误会的地方</p>
+              <h3>第一步不是更重要，只是当前决策的边界。</h3>
+            </div>
+            <p>公式把第一步写出来，是因为任何总和都可以写成“第一项 + 剩余项”。在 (t+1) 时刻，同一条规则会再次发生。</p>
+          </div>
+          <div class="three-meanings-grid">
+            <div class="meaning-item coral-meaning">
+              <span>01</span>
+              <h4>训练里的 one-step</h4>
+              <p>用相邻状态训练 (F(h_t,a_t)\to z_{t+1})，因为相邻监督最直接、最稳定。</p>
+            </div>
+            <div class="meaning-item blue-meaning">
+              <span>02</span>
+              <h4>规划里的多步</h4>
+              <p>LeWM 会把同一个局部模型重复使用 (H) 次，得到 (hat z_{t+1},\ldots,hat z_{t+H})。</p>
+            </div>
+            <div class="meaning-item yellow-meaning">
+              <span>03</span>
+              <h4>执行里的第一步</h4>
+              <p>真实环境只先执行 (a_t)，下一刻重新观察、重新规划；未来动作并没有被永久承诺。</p>
+            </div>
+          </div>
+          <div class="display-math next-step-equation">\[
+            J_t
+            = \underbrace{(1-\gamma)c_{t+1}}_{\text{当前这一步}}
+            +\gamma\,\underbrace{J_{t+1}}_{\text{后面所有步}}
+            \quad\Longrightarrow\quad
+            J_{t+1}=(1-\gamma)c_{t+2}+\gamma J_{t+2}
+          \]</div>
+          <p class="next-step-note">所以第一步只是递归展开时最靠前的一项；后面的每一步都使用同样的规则，并没有被认为“不重要”。</p>
+        </div>
       </div>
     </section>
 

@@ -114,6 +114,19 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
 .unified-split { align-items: stretch; margin-top: 24px; }
 .unified-split .plain-callout { align-content: center; margin-top: 0; }
 .unified-bellman { margin-top: 24px; }
+.next-step-block { margin-top: 44px; padding-top: 34px; border-top: 1px solid var(--line); }
+.next-step-header { display: grid; grid-template-columns: 1.08fr .92fr; gap: 70px; align-items: end; }
+.next-step-header h3 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 34px; font-weight: 500; line-height: 1.18; }
+.next-step-header > p { margin: 0; color: var(--muted); line-height: 1.8; }
+.three-meanings-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 24px; }
+.meaning-item { min-height: 192px; padding: 21px; background: var(--paper); border-top: 4px solid var(--coral); }
+.meaning-item.blue-meaning { border-top-color: var(--blue); }
+.meaning-item.yellow-meaning { border-top-color: var(--yellow); }
+.meaning-item > span { color: var(--muted); font-size: 12px; font-weight: 850; letter-spacing: 1px; }
+.meaning-item h4 { margin: 21px 0 5px; font-size: 18px; }
+.meaning-item p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+.next-step-equation { margin-top: 26px; padding: 18px 0 5px; }
+.next-step-note { margin: 0; color: var(--muted); font-size: 14px; }
 
 .section { padding: 108px 24px; scroll-margin-top: 64px; }
 .section.tinted { background: #e8eee3; }
@@ -284,6 +297,7 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
   .hero { padding-top: 122px; }
   .hero-visual { max-width: 620px; }
   .intro-grid, .split-head, .history-layout, .policy-layout, .distance-layout, .bellman-layout, .sequence-block, .closing-inner { grid-template-columns: 1fr; gap: 32px; }
+  .next-step-header { grid-template-columns: 1fr; gap: 20px; }
   .intro-text { grid-template-columns: 1fr 1fr; }
   .loss-grid { grid-template-columns: repeat(3, 1fr); }
   .loss-item:nth-child(4), .loss-item:nth-child(5) { min-height: 185px; }
@@ -330,7 +344,7 @@ code { padding: 2px 6px; color: var(--green-dark); background: var(--green-soft)
   .hindsight-pair { grid-template-columns: auto 1fr auto 1fr; }
   .hindsight-pair span:nth-of-type(3), .hindsight-pair strong { grid-column: 2 / -1; }
   .readout-row { grid-template-columns: 1fr; gap: 6px; }
-  .loss-grid, .cem-grid { grid-template-columns: 1fr 1fr; }
+  .loss-grid, .cem-grid, .three-meanings-grid { grid-template-columns: 1fr 1fr; }
   .loss-item { min-height: 0; }
   .sequence-row { gap: 3px; }
   .sequence-row span, .sequence-row b, .sequence-row strong { min-height: 38px; font-size: 11px; }
