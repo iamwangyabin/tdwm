@@ -4,6 +4,11 @@ TDWM 基于固定版本的 `stable-worldmodel[all]==0.1.1` 开展 world model
 基线复现和后续方法研究。锁定的实验协议、数据来源与评测参数见
 [`configs/README.md`](configs/README.md)。
 
+当前提出的方法是独立于 LeWM baseline 的 LS-LeWM。它以 LeWM 负责短时任意动作
+预测，以可执行的 goal-conditioned policy 定义长期 successor，并把 successor 作为
+MPC 的终端 tail；完整公式、训练闭环和实现映射见
+[`docs/ls_lewm_method.md`](docs/ls_lewm_method.md)。
+
 ## 趋动云上的 LeWM Cube 快速训练
 
 Cube 的训练样本是随机 sequence clip。HDF5 在 `/gemini/data-*` 远程挂载上的随机

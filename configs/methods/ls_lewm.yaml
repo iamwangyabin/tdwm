@@ -1,0 +1,61 @@
+schema_version: 1
+id: ls_lewm
+display_name: Local-Successor LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  heads: tdwm.methods.local_successor.LocalSuccessorHeads
+  adapter: tdwm.adapters.local_successor.LocalSuccessorLeWM
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+representation:
+  shared_encoder: true
+  state_and_goal_latent: same_lewm_embedding
+  anti_collapse: lewm_sigreg
+  successor_feature_basis: augmented_latent_squared_distance
+
+model:
+  encoder:
+    type: vit_tiny
+    pretrained: false
+    patch_size: 14
+    embedding_dimension: 192
+  local_predictor:
+    type: lewm_action_conditioned_causal_predictor
+    history_frames: 3
+  continuation_policy:
+    type: hindsight_goal_conditioned_behavior_cloning
+    executable_at_inference: true
+  successor:
+    type: policy_conditioned_vector_successor
+    output_dimension: embedding_dimension_plus_2
+    td_steps: 1
+    normalized_discounted_sum: true
+    goal_offset_weighting: uniform_offsets
+    terminal_condition: next_state_is_hindsight_goal
+
+loss:
+  representation:
+    - local_prediction_mse
+    - sigreg
+    - policy_conditioned_successor_td
+  continuation_policy: hindsight_behavior_cloning
+
+inference:
+  objective: discounted_explicit_prefix_plus_policy_consistent_successor_tail
+  prefix_model: lewm
+  tail_model: vector_successor
+  continuation_policy: same_hindsight_gcbc_policy_used_by_td
+  planning: cem_mpc
+
+provenance:
+  note: LS-LeWM is an independent proposed method. It composes the public LeWM model with new policy and successor heads and does not modify the LeWM baseline.
