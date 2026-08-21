@@ -1,0 +1,109 @@
+schema_version: 1
+id: goal_tail_value_cube_v0_1
+method: goal_tail_value
+environment: cube
+stage: offline_debug
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+
+seeds: [3072]
+
+base_model:
+  method: lewm
+  frozen: true
+  history_size: 3
+  latent_dim: 192
+  parameters: 18034628
+
+dataset:
+  identifier: quentinll/lewm-cube
+  file: ogbench/cube_single_expert.h5
+  expected_size_bytes: 101942558720
+  accepted_size_bytes: [101942558720, 74104077358]
+  optimized_layout:
+    file: cube_single_expert_chunk1.h5
+    pixels_chunk_frames: 1
+    lossless: true
+    sha256: 3cf6477768f1a2979acefa3aeb6c27c45422b8b6fbce8527419943d3e679a245
+  lance:
+    suffix: .lance
+    manifest_suffix: .manifest.json
+    stable_worldmodel_version: 0.1.1
+    image_codec: jpeg
+    jpeg_quality: 100
+    minimum_pixel_verification_samples: 128
+    numeric_verification:
+      action: exact
+      observation: float32_cast_exact
+    source:
+      file: cube_single_expert_chunk1.h5
+      size_bytes: 74104077358
+      sha256: 3cf6477768f1a2979acefa3aeb6c27c45422b8b6fbce8527419943d3e679a245
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  keys_to_load: [pixels, action, observation]
+  keys_to_cache: [action, observation]
+  keys_to_merge:
+    proprio: observation
+
+split:
+  unit: episode
+  train_fraction: 0.9
+  validation_fraction: 0.1
+  seed: 42
+  note: Whole-episode separation prevents overlapping future-goal clips from leaking into validation.
+
+sequence:
+  frame_skip: 5
+  history_frames: 3
+  max_goal_offset: 16
+  num_steps: 19
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+tail_value:
+  objective: supervised_mc
+  hidden_dim: 512
+  gamma: 0.95
+  goal_sampling: uniform_future_offset
+  history: three_latents_plus_two_normalized_action_blocks
+
+loader:
+  batch_size: 8
+  episode_streaming: true
+  episode_pool_size: 256
+  episode_read_size: 16
+  episode_cache_bytes: 4294967296
+  episode_prefetch_blocks: 8
+  minimum_unique_episodes_per_batch: 8
+  validation_workers: 2
+  validation_block_size: 1024
+  prefetch_factor: 2
+  pin_memory: true
+
+optimizer:
+  type: AdamW
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+
+training:
+  epochs: 20
+  steps_per_epoch: 50
+  validation_batches: 25
+  validate_before_training: true
+  precision: bf16
+  gradient_clip_norm: 1.0
+  log_every_steps: 10
+
+planner:
+  connected: false
+
+provenance:
+  base_protocol: configs/experiment/lewm_cube_train.yaml
+  note: V0.1 freezes the reproduced LeWM checkpoint and optimizes only GoalTailValue with finite-horizon Monte Carlo latent cost.
