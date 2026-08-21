@@ -4,10 +4,14 @@ TDWM 基于固定版本的 `stable-worldmodel[all]==0.1.1` 开展 world model
 基线复现和后续方法研究。锁定的实验协议、数据来源与评测参数见
 [`configs/README.md`](configs/README.md)。
 
-当前提出的方法是独立于 LeWM baseline 的 LS-LeWM。它以 LeWM 负责短时任意动作
-预测，以可执行的 goal-conditioned policy 定义长期 successor，并把 successor 作为
-MPC 的终端 tail；完整公式、训练闭环和实现映射见
-[`docs/ls_lewm_method.md`](docs/ls_lewm_method.md)。
+当前第一阶段方法是 **Joint TD-GT-LeWM**：从已复现的 LeWM checkpoint 初始化，
+冻结 encoder/projector，同时联合训练 `predictor + action_encoder + pred_proj` 和
+scalar goal-tail value。Value 在与 Cube CEM 一致的 5-step LeWM imagined rollout
+terminal history 上接受 TD 监督，tail loss 会反传进 LeWM dynamics。锁定协议见
+[`configs/experiment/joint_td_gt_lewm_cube_train.yaml`](configs/experiment/joint_td_gt_lewm_cube_train.yaml)。
+
+LS-LeWM 保留为后续 policy-conditioned successor 方向；其设计见
+[`docs/ls_lewm_method.md`](docs/ls_lewm_method.md)，当前阶段不训练该扩展。
 
 ## 趋动云上的 LeWM Cube 快速训练
 
