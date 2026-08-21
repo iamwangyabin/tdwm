@@ -185,6 +185,7 @@ def _evaluate_goal_tail_lewm(
     value_validator: Callable[..., None],
     policy_builder: Callable[..., Any],
     method: str,
+    world_model_updater: Callable[[Any, dict[str, Any]], None] | None = None,
     video: bool = False,
     smoke: bool = False,
 ) -> dict[str, Any]:
@@ -277,6 +278,8 @@ def _evaluate_goal_tail_lewm(
         dataset, output_dir / "action_normalization.json"
     )
     model = swm.wm.load_pretrained(base_name, cache_dir=str(base_cache)).to("cuda")
+    if world_model_updater is not None:
+        world_model_updater(model, value_payload)
     model.eval()
     model.requires_grad_(False)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
