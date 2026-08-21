@@ -1,0 +1,119 @@
+schema_version: 1
+id: td_gt_lewm_cube_full
+method: td_gt_lewm
+display_name: TD-GT-LeWM
+environment: cube
+stage: full_training
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+
+seeds: [3072]
+
+base_model:
+  method: lewm
+  frozen: true
+  history_size: 3
+  latent_dim: 192
+  parameters: 18034628
+
+dataset:
+  identifier: quentinll/lewm-cube
+  file: ogbench/cube_single_expert.h5
+  expected_size_bytes: 101942558720
+  accepted_size_bytes: [101942558720, 74104077358]
+  optimized_layout:
+    file: cube_single_expert_chunk1.h5
+    pixels_chunk_frames: 1
+    lossless: true
+    sha256: 3cf6477768f1a2979acefa3aeb6c27c45422b8b6fbce8527419943d3e679a245
+  lance:
+    suffix: .lance
+    manifest_suffix: .manifest.json
+    stable_worldmodel_version: 0.1.1
+    image_codec: jpeg
+    jpeg_quality: 100
+    minimum_pixel_verification_samples: 128
+    numeric_verification:
+      action: exact
+      observation: float32_cast_exact
+    source:
+      file: cube_single_expert_chunk1.h5
+      size_bytes: 74104077358
+      sha256: 3cf6477768f1a2979acefa3aeb6c27c45422b8b6fbce8527419943d3e679a245
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  keys_to_load: [pixels, action, observation]
+  keys_to_cache: [action, observation]
+  keys_to_merge:
+    proprio: observation
+
+split:
+  unit: episode
+  train_fraction: 0.9
+  validation_fraction: 0.1
+  seed: 42
+
+sequence:
+  frame_skip: 5
+  history_frames: 3
+  max_goal_offset: 16
+  num_steps: 19
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+tail_value:
+  objective: one_step_td
+  hidden_dim: 512
+  gamma: 0.95
+  goal_sampling: uniform_future_offset
+  history: three_latents_plus_two_normalized_action_blocks
+  target_network: true
+  target_ema_decay: 0.995
+  terminate_bootstrap_at_goal: true
+
+initialization:
+  value: random
+  target: copy_of_initial_value
+  mc_gt_warm_start: false
+
+latent_cache:
+  dtype: float32
+  batch_size: 256
+  workers: 0
+  prefetch_factor: 2
+  pin_memory: true
+  log_every_batches: 100
+
+loader:
+  batch_size: 4096
+  validation_batch_size: 512
+  workers: 4
+  prefetch_factor: 2
+  pin_memory: true
+  train_drop_last: false
+
+optimizer:
+  type: AdamW
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+
+training:
+  epochs: 20
+  coverage: all_training_clips_each_epoch
+  validate_before_training: true
+  checkpoint_selection: minimum_validation_mc_mse
+  gradient_clip_norm: 1.0
+
+planner:
+  connected: false
+
+provenance:
+  base_protocol: configs/experiment/lewm_cube_train.yaml
+  preceding_method: configs/experiment/mc_gt_lewm_cube_train.yaml
+  note: Training uses only one-step TD targets; exact finite-horizon MC returns are computed only as a fixed validation metric and never optimized.

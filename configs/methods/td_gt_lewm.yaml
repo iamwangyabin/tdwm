@@ -1,0 +1,39 @@
+schema_version: 1
+id: td_gt_lewm
+display_name: TD-GT-LeWM
+full_name: Temporal-Difference Goal-Tail LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  value: tdwm.methods.goal_tail_value.GoalTailValue
+
+base_model:
+  frozen: true
+  history_size: 3
+
+value:
+  input: three_latents_plus_two_normalized_action_blocks_and_goal
+  output: scalar_normalized_discounted_latent_cost
+  hidden_dim: 512
+
+objective:
+  type: one_step_temporal_difference
+  gamma: 0.95
+  future_goal_offset: [1, 16]
+  goal_terminal_bootstrap: false
+  target_network: true
+  target_ema_decay: 0.995
+  policy: false
+  successor: false
+
+initialization:
+  source: random
+  mc_gt_warm_start: false
+
+inference:
+  planner_connected: false
+  planned_objective: terminal_latent_goal_distance_plus_goal_tail_value
