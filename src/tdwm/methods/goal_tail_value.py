@@ -147,8 +147,9 @@ def select_goal_tail_samples(
         current_index=current_index,
         history_size=history_size,
     )
-    all_targets = monte_carlo_goal_tail_targets(
+    targets = monte_carlo_goal_tail_targets_for_offsets(
         latents,
+        goal_offsets,
         current_index=current_index,
         max_goal_offset=max_goal_offset,
         gamma=gamma,
@@ -156,5 +157,47 @@ def select_goal_tail_samples(
     rows = torch.arange(latents.shape[0], device=latents.device)
     goal_indices = current_index + goal_offsets
     goals = latents[rows, goal_indices]
-    targets = all_targets[rows, goal_offsets - 1]
     return history, goals, targets
+
+
+def monte_carlo_goal_tail_targets_for_offsets(
+    latents: torch.Tensor,
+    goal_offsets: torch.Tensor,
+    *,
+    current_index: int,
+    max_goal_offset: int,
+    gamma: float,
+) -> torch.Tensor:
+    """Return one normalized MC target per requested future-goal offset."""
+
+    if latents.ndim != 3:
+        raise ValueError("latents must have shape (batch, time, dim).")
+    if goal_offsets.ndim != 1 or goal_offsets.shape[0] != latents.shape[0]:
+        raise ValueError("goal_offsets must contain one offset per batch element.")
+    if goal_offsets.dtype not in (torch.int32, torch.int64):
+        raise TypeError("goal_offsets must use an integer dtype.")
+    if not 0.0 <= gamma < 1.0:
+        raise ValueError("gamma must lie in [0, 1).")
+    if max_goal_offset <= 0:
+        raise ValueError("max_goal_offset must be positive.")
+    if current_index < 0 or current_index + max_goal_offset >= latents.shape[1]:
+        raise ValueError("latents do not contain the requested future goals.")
+    if torch.any(goal_offsets < 1) or torch.any(goal_offsets > max_goal_offset):
+        raise ValueError("goal_offsets must lie in [1, max_goal_offset].")
+
+    rows = torch.arange(latents.shape[0], device=latents.device)
+    goals = latents[rows, current_index + goal_offsets]
+    future = latents[
+        :, current_index + 1 : current_index + max_goal_offset + 1
+    ]
+    step_costs = latent_goal_cost(future, goals.unsqueeze(1))
+    future_steps = torch.arange(
+        1,
+        max_goal_offset + 1,
+        device=latents.device,
+    )
+    valid = future_steps.unsqueeze(0) <= goal_offsets.unsqueeze(1)
+    weights = torch.pow(latents.new_tensor(gamma), future_steps - 1)
+    return (1.0 - gamma) * (
+        step_costs * valid * weights.unsqueeze(0)
+    ).sum(dim=-1)

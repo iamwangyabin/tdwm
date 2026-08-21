@@ -10,6 +10,7 @@ from tdwm.methods.goal_tail_value import (
     build_goal_tail_history,
     latent_goal_cost,
     monte_carlo_goal_tail_targets,
+    monte_carlo_goal_tail_targets_for_offsets,
     select_goal_tail_samples,
 )
 from tdwm.training.train_goal_tail_cube import (
@@ -86,6 +87,28 @@ def test_sample_selection_matches_requested_future_offsets():
 
     assert torch.equal(goals, torch.tensor([[3.0], [9.0]]))
     assert torch.allclose(targets, torch.tensor([0.0, 0.5]))
+
+
+def test_offset_specific_mc_targets_match_the_full_target_table():
+    torch.manual_seed(4)
+    latents = torch.randn(3, 6, 4)
+    offsets = torch.tensor([1, 2, 3])
+
+    selected = monte_carlo_goal_tail_targets_for_offsets(
+        latents,
+        offsets,
+        current_index=2,
+        max_goal_offset=3,
+        gamma=0.95,
+    )
+    full = monte_carlo_goal_tail_targets(
+        latents,
+        current_index=2,
+        max_goal_offset=3,
+        gamma=0.95,
+    )
+
+    assert torch.allclose(selected, full[torch.arange(3), offsets - 1])
 
 
 def test_goal_tail_value_is_the_requested_two_hidden_layer_mlp():
