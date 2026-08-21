@@ -279,6 +279,50 @@ def ema_update_target(
         target_parameter.mul_(decay).add_(parameter, alpha=1.0 - decay)
 
 
+def restore_td_training_state(
+    checkpoint_path: str | Path,
+    *,
+    value: GoalTailValue,
+    target_value: GoalTailValue,
+    optimizer: torch.optim.Optimizer,
+    loader_generator: torch.Generator,
+    goal_generator: torch.Generator,
+    base_checkpoint_sha256: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Restore every state that affects subsequent TD optimizer updates."""
+
+    device = next(value.parameters()).device
+    payload = torch.load(
+        Path(checkpoint_path).expanduser().resolve(),
+        map_location=device,
+        weights_only=False,
+    )
+    if payload.get("method") != "td_gt_lewm":
+        raise ValueError("The resume checkpoint is not TD-GT-LeWM.")
+    if payload.get("training_state_version") != 1:
+        raise ValueError("The TD checkpoint does not contain resumable state version 1.")
+    if payload.get("base_checkpoint_sha256") != base_checkpoint_sha256:
+        raise ValueError("The resume checkpoint uses a different LeWM base.")
+    if int(payload.get("seed", -1)) != seed:
+        raise ValueError("The resume checkpoint seed differs from this run.")
+    config = payload["value_config"]
+    expected = {
+        "history_dim": value.history_dim,
+        "goal_dim": value.goal_dim,
+        "hidden_dim": value.hidden_dim,
+    }
+    for key, expected_value in expected.items():
+        if int(config.get(key, -1)) != expected_value:
+            raise ValueError(f"The resume checkpoint {key} differs from this run.")
+    value.load_state_dict(payload["value_state_dict"])
+    target_value.load_state_dict(payload["target_value_state_dict"])
+    optimizer.load_state_dict(payload["optimizer_state_dict"])
+    loader_generator.set_state(payload["loader_generator_state"].cpu())
+    goal_generator.set_state(payload["goal_generator_state"].cpu())
+    return payload
+
+
 def train_td_gt_lewm(
     *,
     protocol_path: str | Path,
@@ -289,13 +333,17 @@ def train_td_gt_lewm(
     seed: int,
     latent_cache_dir: str | Path | None = None,
     smoke: bool = False,
+    smoke_epochs: int = 1,
+    resume_checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Train a one-step TD goal-tail value on the full frozen Cube dataset."""
 
     protocol = load_td_gt_protocol(protocol_path)
     if smoke:
+        if smoke_epochs <= 0:
+            raise ValueError("smoke_epochs must be positive.")
         protocol["id"] = f"{protocol['id']}_smoke"
-        protocol["training"]["epochs"] = 1
+        protocol["training"]["epochs"] = smoke_epochs
         protocol["loader"].update(
             {"batch_size": 1024, "validation_batch_size": 512, "workers": 0}
         )
@@ -430,12 +478,13 @@ def train_td_gt_lewm(
                 "prefetch_factor": int(loader_cfg["prefetch_factor"]),
             }
         )
+    loader_generator = torch.Generator().manual_seed(seed)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=int(loader_cfg["batch_size"]),
         shuffle=True,
         drop_last=bool(loader_cfg["train_drop_last"]),
-        generator=torch.Generator().manual_seed(seed),
+        generator=loader_generator,
         **loader_common,
     )
     validation_loader = torch.utils.data.DataLoader(
@@ -468,6 +517,31 @@ def train_td_gt_lewm(
 
     training_cfg = protocol["training"]
     epochs = int(training_cfg["epochs"])
+    goal_generator = torch.Generator().manual_seed(seed + 1)
+    start_epoch = 0
+    global_step = 0
+    best_validation_mc_mse = float("inf")
+    last_metrics: dict[str, Any] | None = None
+    resume_payload = None
+    if resume_checkpoint_path is not None:
+        resume_payload = restore_td_training_state(
+            resume_checkpoint_path,
+            value=value,
+            target_value=target_value,
+            optimizer=optimizer,
+            loader_generator=loader_generator,
+            goal_generator=goal_generator,
+            base_checkpoint_sha256=base_sha256,
+            seed=seed,
+        )
+        start_epoch = int(resume_payload["epoch"])
+        global_step = int(resume_payload["global_step"])
+        best_validation_mc_mse = float(
+            resume_payload["best_validation_mc_mse"]
+        )
+        last_metrics = dict(resume_payload["metrics"])
+        if start_epoch >= epochs:
+            raise ValueError("The resume checkpoint already reached configured epochs.")
     manifest = {
         "method": "td_gt_lewm",
         "display_name": "TD-GT-LeWM",
@@ -476,6 +550,12 @@ def train_td_gt_lewm(
         "protocol_path": str(Path(protocol_path).resolve()),
         "seed": seed,
         "smoke": smoke,
+        "resume_checkpoint": (
+            str(Path(resume_checkpoint_path).expanduser().resolve())
+            if resume_checkpoint_path is not None
+            else None
+        ),
+        "start_epoch": start_epoch,
         "dataset": {
             **dataset_source,
             "sequence_samples": len(dataset),
@@ -527,12 +607,9 @@ def train_td_gt_lewm(
     ema_decay = float(tail_cfg["target_ema_decay"])
     current_index = history_size - 1
     max_goal_offset = int(sequence["max_goal_offset"])
-    goal_generator = torch.Generator().manual_seed(seed + 1)
     metrics_path = run_dir / "metrics.jsonl"
-    best_validation_mc_mse = float("inf")
-    global_step = 0
     initial_validation = None
-    if bool(training_cfg["validate_before_training"]):
+    if start_epoch == 0 and bool(training_cfg["validate_before_training"]):
         initial_validation = _validate_td_value(
             value,
             target_value,
@@ -547,8 +624,7 @@ def train_td_gt_lewm(
         _append_json_line(metrics_path, initial_metrics)
 
     started = time.time()
-    last_metrics: dict[str, Any] | None = None
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         value.train()
         squared_error = 0.0
         sample_count = 0
@@ -609,11 +685,19 @@ def train_td_gt_lewm(
         }
         print(json.dumps(last_metrics, sort_keys=True), flush=True)
         _append_json_line(metrics_path, last_metrics)
+        best_validation_mc_mse = min(
+            best_validation_mc_mse, float(validation["validation_mc_mse"])
+        )
         checkpoint = {
             "objective_version": 1,
+            "training_state_version": 1,
             "method": "td_gt_lewm",
+            "seed": seed,
             "value_state_dict": value.state_dict(),
             "target_value_state_dict": target_value.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "loader_generator_state": loader_generator.get_state(),
+            "goal_generator_state": goal_generator.get_state(),
             "value_config": {
                 "history_dim": history_dim,
                 "goal_dim": latent_dim,
@@ -629,13 +713,13 @@ def train_td_gt_lewm(
             "base_checkpoint_sha256": base_sha256,
             "epoch": epoch + 1,
             "global_step": global_step,
+            "best_validation_mc_mse": best_validation_mc_mse,
             "metrics": last_metrics,
         }
         checkpoint_dir = run_dir / "checkpoints"
         _save_checkpoint(checkpoint_dir / f"epoch_{epoch + 1:02d}.pt", checkpoint)
         _save_checkpoint(checkpoint_dir / "last.pt", checkpoint)
-        if validation["validation_mc_mse"] < best_validation_mc_mse:
-            best_validation_mc_mse = float(validation["validation_mc_mse"])
+        if validation["validation_mc_mse"] == best_validation_mc_mse:
             _save_checkpoint(checkpoint_dir / "best.pt", checkpoint)
 
     result = {
@@ -644,6 +728,7 @@ def train_td_gt_lewm(
         "run_dir": str(run_dir),
         "global_step": global_step,
         "epochs": epochs,
+        "start_epoch": start_epoch,
         "elapsed_seconds": time.time() - started,
         "best_validation_mc_mse": best_validation_mc_mse,
         "initial_validation": initial_validation,

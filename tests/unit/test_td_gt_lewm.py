@@ -13,6 +13,7 @@ from tdwm.training.td_gt_lewm import (
     ema_update_target,
     load_td_gt_protocol,
     one_step_td_goal_tail_targets,
+    restore_td_training_state,
 )
 
 
@@ -82,6 +83,81 @@ def test_ema_target_uses_only_online_parameters():
 
     for parameter in target.parameters():
         assert torch.allclose(parameter, torch.ones_like(parameter))
+
+
+def test_td_checkpoint_restores_network_optimizer_and_sampling_rng(tmp_path):
+    value = GoalTailValue(history_dim=3, goal_dim=1, hidden_dim=2)
+    target = GoalTailValue(history_dim=3, goal_dim=1, hidden_dim=2)
+    optimizer = torch.optim.AdamW(value.parameters(), lr=1e-3)
+    loss = value(torch.ones(2, 3), torch.ones(2, 1)).sum()
+    loss.backward()
+    optimizer.step()
+    loader_generator = torch.Generator().manual_seed(11)
+    goal_generator = torch.Generator().manual_seed(12)
+    torch.rand(3, generator=loader_generator)
+    torch.rand(4, generator=goal_generator)
+    saved_value = {key: item.clone() for key, item in value.state_dict().items()}
+    saved_target = {key: item.clone() for key, item in target.state_dict().items()}
+    loader_state = loader_generator.get_state()
+    goal_state = goal_generator.get_state()
+    checkpoint = tmp_path / "epoch_01.pt"
+    torch.save(
+        {
+            "training_state_version": 1,
+            "method": "td_gt_lewm",
+            "seed": 3072,
+            "base_checkpoint_sha256": "base-hash",
+            "value_state_dict": saved_value,
+            "target_value_state_dict": saved_target,
+            "optimizer_state_dict": optimizer.state_dict(),
+            "loader_generator_state": loader_state,
+            "goal_generator_state": goal_state,
+            "value_config": {
+                "history_dim": 3,
+                "goal_dim": 1,
+                "hidden_dim": 2,
+            },
+            "epoch": 1,
+            "global_step": 2,
+            "best_validation_mc_mse": 0.1,
+            "metrics": {"validation_mc_mse": 0.1},
+        },
+        checkpoint,
+    )
+    with torch.no_grad():
+        for parameter in value.parameters():
+            parameter.zero_()
+        for parameter in target.parameters():
+            parameter.fill_(5.0)
+    loader_generator.manual_seed(99)
+    goal_generator.manual_seed(100)
+
+    payload = restore_td_training_state(
+        checkpoint,
+        value=value,
+        target_value=target,
+        optimizer=optimizer,
+        loader_generator=loader_generator,
+        goal_generator=goal_generator,
+        base_checkpoint_sha256="base-hash",
+        seed=3072,
+    )
+
+    assert payload["epoch"] == 1
+    for key, item in value.state_dict().items():
+        assert torch.equal(item, saved_value[key])
+    for key, item in target.state_dict().items():
+        assert torch.equal(item, saved_target[key])
+    expected_loader = torch.Generator().set_state(loader_state)
+    expected_goal = torch.Generator().set_state(goal_state)
+    assert torch.equal(
+        torch.rand(5, generator=loader_generator),
+        torch.rand(5, generator=expected_loader),
+    )
+    assert torch.equal(
+        torch.rand(5, generator=goal_generator),
+        torch.rand(5, generator=expected_goal),
+    )
 
 
 def test_formal_td_gt_protocol_is_a_clean_objective_change():

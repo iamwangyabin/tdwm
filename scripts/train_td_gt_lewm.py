@@ -36,6 +36,17 @@ def parse_args() -> argparse.Namespace:
         help="Run two training steps and a small checkpoint/validation pass.",
     )
     parser.add_argument(
+        "--smoke-epochs",
+        type=int,
+        default=1,
+        help="Number of tiny epochs to run in smoke mode.",
+    )
+    parser.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        help="Resume value, target, optimizer, and sampling RNG states.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help="Defaults below TDWM_RUN_ROOT or outputs/.",
@@ -62,6 +73,8 @@ def main() -> None:
         seed=args.seed,
         latent_cache_dir=args.latent_cache_dir,
         smoke=args.smoke,
+        smoke_epochs=args.smoke_epochs,
+        resume_checkpoint_path=args.resume_checkpoint,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
