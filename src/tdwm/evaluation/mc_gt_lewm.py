@@ -8,7 +8,7 @@ import os
 import platform
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import yaml
@@ -117,7 +117,7 @@ def _resolve_value_checkpoint(path: str | Path) -> Path:
     requested = Path(path).expanduser().resolve()
     if requested.is_file() and requested.suffix == ".pt":
         return requested
-    raise FileNotFoundError("Pass the exact MC-GT-LeWM .pt checkpoint file.")
+    raise FileNotFoundError("Pass the exact goal-tail .pt checkpoint file.")
 
 
 def _validate_value_checkpoint(
@@ -172,19 +172,25 @@ def _load_action_processor(dataset: Any, path: Path):
     return processor, stats
 
 
-def evaluate_mc_gt_lewm(
+def _evaluate_goal_tail_lewm(
     *,
     protocol_path: str | Path,
     dataset_path: str | Path,
     output_dir: str | Path,
     base_checkpoint_path: str | Path,
     value_checkpoint_path: str | Path,
+    protocol_loader: Callable[[str | Path], dict[str, Any]],
+    protocol_validator: Callable[[dict[str, Any]], None],
+    value_loader: Callable[..., tuple[Any, dict[str, Any], dict[str, Any]]],
+    value_validator: Callable[..., None],
+    policy_builder: Callable[..., Any],
+    method: str,
     video: bool = False,
     smoke: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate MC-GT-LeWM with the baseline's dataset, CEM, and episodes."""
+    """Evaluate one scalar goal-tail method under the locked LeWM protocol."""
 
-    protocol = load_mc_gt_evaluation_protocol(protocol_path)
+    protocol = protocol_loader(protocol_path)
     if smoke:
         protocol["id"] = f"{protocol['id']}_smoke"
         protocol["evaluation"]["episodes"] = 1
@@ -192,7 +198,7 @@ def evaluate_mc_gt_lewm(
             {"candidates": 8, "iterations": 1, "elites": 2, "episode_budget": 25}
         )
         protocol["smoke"] = True
-        validate_mc_gt_evaluation_protocol(protocol)
+        protocol_validator(protocol)
 
     dataset_path = Path(dataset_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -220,12 +226,12 @@ def evaluate_mc_gt_lewm(
     if base_hash != protocol["base_checkpoint"]["sha256"]:
         raise ValueError("Base LeWM checkpoint SHA-256 differs from protocol.")
     if value_hash != protocol["value_checkpoint"]["sha256"]:
-        raise ValueError("MC-GT-LeWM checkpoint SHA-256 differs from protocol.")
+        raise ValueError(f"{method} checkpoint SHA-256 differs from protocol.")
 
-    value, value_config, value_payload = load_mc_goal_tail_value(
+    value, value_config, value_payload = value_loader(
         value_file, map_location="cuda"
     )
-    _validate_value_checkpoint(
+    value_validator(
         value_payload,
         value_config,
         protocol,
@@ -278,7 +284,7 @@ def evaluate_mc_gt_lewm(
         raise ValueError("The LeWM parameter count differs from protocol.")
     value_parameter_count = sum(parameter.numel() for parameter in value.parameters())
     if value_parameter_count != protocol["value_checkpoint"]["parameters"]:
-        raise ValueError("The MC goal-tail parameter count differs from protocol.")
+        raise ValueError("The goal-tail parameter count differs from protocol.")
 
     image_stats = protocol["image_preprocessing"]
     image_transform = transforms.Compose(
@@ -290,7 +296,7 @@ def evaluate_mc_gt_lewm(
         ]
     )
     tail_cfg = protocol["tail_value"]
-    policy = make_mc_goal_tail_policy(
+    policy = policy_builder(
         world_model=model,
         value=value,
         planning=planning_cfg,
@@ -385,9 +391,38 @@ def evaluate_mc_gt_lewm(
         "elapsed_seconds": time.time() - started,
         "base_parameter_count": parameter_count,
         "value_parameter_count": value_parameter_count,
-        "method": "mc_gt_lewm",
+        "method": method,
         "smoke": smoke,
         "protocol_manifest": str(output_dir / "protocol_manifest.json"),
     }
     _write_json(output_dir / "results.json", result)
     return _jsonable(result)
+
+
+def evaluate_mc_gt_lewm(
+    *,
+    protocol_path: str | Path,
+    dataset_path: str | Path,
+    output_dir: str | Path,
+    base_checkpoint_path: str | Path,
+    value_checkpoint_path: str | Path,
+    video: bool = False,
+    smoke: bool = False,
+) -> dict[str, Any]:
+    """Evaluate MC-GT-LeWM with the baseline's dataset, CEM, and episodes."""
+
+    return _evaluate_goal_tail_lewm(
+        protocol_path=protocol_path,
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        base_checkpoint_path=base_checkpoint_path,
+        value_checkpoint_path=value_checkpoint_path,
+        video=video,
+        smoke=smoke,
+        protocol_loader=load_mc_gt_evaluation_protocol,
+        protocol_validator=validate_mc_gt_evaluation_protocol,
+        value_loader=load_mc_goal_tail_value,
+        value_validator=_validate_value_checkpoint,
+        policy_builder=make_mc_goal_tail_policy,
+        method="mc_gt_lewm",
+    )
