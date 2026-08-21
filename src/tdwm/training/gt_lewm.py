@@ -43,6 +43,7 @@ from tdwm.training.lance_batch import (
     EpisodeStreamingBatchDataset,
     StrideAwareLanceDataset,
 )
+from tdwm.training.lewm import _git_revision
 
 
 def load_gt_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -438,10 +439,17 @@ def train_gt_lewm(
     resume: str = "auto",
     max_steps: int | None = None,
     skip_validation: bool = False,
+    _protocol_loader=None,
+    _module_builder=None,
+    _export_callback_builder=None,
+    _method: str = "gt_lewm",
 ) -> dict[str, Any]:
     """Train GT-LeWM without entering the baseline LeWM training entry point."""
 
-    protocol = load_gt_training_protocol(protocol_path)
+    protocol_loader = _protocol_loader or load_gt_training_protocol
+    module_builder = _module_builder or _build_training_module
+    export_callback_builder = _export_callback_builder or _build_export_callback
+    protocol = protocol_loader(protocol_path)
     if seed not in protocol["seeds"]:
         raise ValueError(f"Seed {seed} is not in the locked seeds {protocol['seeds']}.")
     if resume not in {"auto", "never", "required"}:
@@ -631,7 +639,7 @@ def train_gt_lewm(
     total_steps = min(2, len(train_loader)) if smoke else formal_steps
     if max_steps is not None:
         total_steps = int(train_limit)
-    module = _build_training_module(
+    module = module_builder(
         world_model,
         protocol,
         total_steps,
@@ -650,7 +658,7 @@ def train_gt_lewm(
     epochs = 1 if smoke or max_steps is not None else protocol["training"]["epochs"]
     callbacks = [
         checkpoint_callback,
-        _build_export_callback(run_dir, model_config, protocol),
+        export_callback_builder(run_dir, model_config, protocol),
         _build_generator_callback(generator),
     ]
     if episode_train_dataset is not None:
@@ -703,7 +711,7 @@ def train_gt_lewm(
     write_json(
         run_dir / "training_manifest.json",
         {
-            "method": "gt_lewm",
+            "method": _method,
             "protocol": protocol,
             "protocol_path": str(Path(protocol_path).resolve()),
             "seed": seed,
@@ -728,6 +736,9 @@ def train_gt_lewm(
                 "stable_worldmodel": package_version,
                 "torch": torch.__version__,
                 "python": platform.python_version(),
+                "platform": platform.platform(),
+                "tdwm_git_revision": _git_revision(),
+                "cuda_device": torch.cuda.get_device_name(0),
                 "compatibility_adapter": compatibility,
             },
         },

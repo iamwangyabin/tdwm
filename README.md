@@ -4,11 +4,15 @@ TDWM 基于固定版本的 `stable-worldmodel[all]==0.1.1` 开展 world model
 基线复现和后续方法研究。锁定的实验协议、数据来源与评测参数见
 [`configs/README.md`](configs/README.md)。
 
-当前第一阶段方法是 **Joint TD-GT-LeWM**：从已复现的 LeWM checkpoint 初始化，
-冻结 encoder/projector，同时联合训练 `predictor + action_encoder + pred_proj` 和
-scalar goal-tail value。Value 在与 Cube CEM 一致的 5-step LeWM imagined rollout
-terminal history 上接受 TD 监督，tail loss 会反传进 LeWM dynamics。锁定协议见
-[`configs/experiment/joint_td_gt_lewm_cube_train.yaml`](configs/experiment/joint_td_gt_lewm_cube_train.yaml)。
+当前正式方法是 **E2E Joint TD-GT-LeWM**：不加载 LeWM checkpoint 或 latent cache，
+从 Cube 原始图像和随机初始化开始，在一个训练图和一个优化器中共同更新
+`encoder + projector + predictor + action_encoder + pred_proj + GoalTailValue`。训练保留
+LeWM 原始 prediction MSE 与 SIGReg；value 在与 Cube CEM 一致的 5-step 可微 imagined
+rollout terminal history 上接受 TD 监督，tail loss 同时反传到表征和 dynamics。锁定协议见
+[`configs/experiment/e2e_joint_td_gt_lewm_cube_train.yaml`](configs/experiment/e2e_joint_td_gt_lewm_cube_train.yaml)。
+
+旧的 **Joint TD-GT-LeWM** checkpoint 初始化实验只属于 frozen-representation dynamics
+fine-tuning 诊断，不是端到端正式方法，也不能作为正式训练结果。
 
 LS-LeWM 保留为后续 policy-conditioned successor 方向；其设计见
 [`docs/ls_lewm_method.md`](docs/ls_lewm_method.md)，当前阶段不训练该扩展。
