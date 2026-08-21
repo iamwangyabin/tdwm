@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import torch
 from torch import nn
+import yaml
 
 from tdwm.adapters.joint_td_gt_lewm import (
     JointTDGoalTailLeWM,
@@ -11,7 +13,11 @@ from tdwm.adapters.joint_td_gt_lewm import (
     load_joint_td_goal_tail_value,
 )
 from tdwm.adapters.mc_gt_lewm import MCGoalTailLeWM
+from tdwm.evaluation.joint_td_gt_lewm import load_joint_td_gt_evaluation_protocol
 from tdwm.methods.goal_tail_value import GoalTailValue
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_joint_checkpoint_loads_value_and_replaces_lewm_state(tmp_path):
@@ -59,3 +65,23 @@ def test_joint_checkpoint_loads_value_and_replaces_lewm_state(tmp_path):
 
 def test_joint_planner_uses_the_same_terminal_cost_adapter():
     assert issubclass(JointTDGoalTailLeWM, MCGoalTailLeWM)
+
+
+def test_joint_planner_protocol_keeps_the_baseline_cem_and_episode_sample():
+    protocol = load_joint_td_gt_evaluation_protocol(
+        ROOT / "configs/experiment/joint_td_gt_lewm_cube_seed3072_o25.yaml"
+    )
+    with (ROOT / "configs/experiment/lewm_cube_seed3072_o25.yaml").open() as stream:
+        baseline = yaml.safe_load(stream)
+    with (
+        ROOT / "configs/experiment/td_gt_lewm_cube_seed3072_o25.yaml"
+    ).open() as stream:
+        diagnostic = yaml.safe_load(stream)
+
+    assert protocol["evaluation"] == baseline["evaluation"]
+    assert protocol["world"] == baseline["world"]
+    assert protocol["planning"] == diagnostic["planning"]
+    assert protocol["base_checkpoint"] == diagnostic["base_checkpoint"]
+    assert protocol["value_checkpoint"]["epoch"] == 1
+    assert protocol["value_checkpoint"]["includes_world_model_state"] is True
+    assert protocol["tail_value"]["model_rollout_horizon"] == 5
