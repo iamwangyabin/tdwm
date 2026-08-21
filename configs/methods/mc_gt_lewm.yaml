@@ -31,5 +31,7 @@ objective:
   successor: false
 
 inference:
-  planner_connected: false
-  planned_objective: terminal_latent_goal_distance_plus_goal_tail_value
+  planner_connected: true
+  objective: terminal_latent_goal_distance_plus_goal_tail_value
+  tail_weight: 1.0
+  cost_scale_note: The upstream LeWM sum cost and mean-trained value are put on a common scale by multiplying the value by latent_dim.

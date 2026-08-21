@@ -2,5 +2,10 @@
 
 from .lewm_checkpoint import evaluate_official_lewm
 from .local_successor import evaluate_ls_lewm
+from .mc_gt_lewm import evaluate_mc_gt_lewm
 
-__all__ = ["evaluate_ls_lewm", "evaluate_official_lewm"]
+__all__ = [
+    "evaluate_ls_lewm",
+    "evaluate_mc_gt_lewm",
+    "evaluate_official_lewm",
+]
