@@ -4,12 +4,17 @@ TDWM 基于固定版本的 `stable-worldmodel[all]==0.1.1` 开展 world model
 基线复现和后续方法研究。锁定的实验协议、数据来源与评测参数见
 [`configs/README.md`](configs/README.md)。
 
-当前正式方法是 **E2E Joint TD-GT-LeWM**：不加载 LeWM checkpoint 或 latent cache，
-从 Cube 原始图像和随机初始化开始，在一个训练图和一个优化器中共同更新
-`encoder + projector + predictor + action_encoder + pred_proj + GoalTailValue`。训练保留
-LeWM 原始 prediction MSE 与 SIGReg；value 在与 Cube CEM 一致的 5-step 可微 imagined
-rollout terminal history 上接受 TD 监督，tail loss 同时反传到表征和 dynamics。锁定协议见
-[`configs/experiment/e2e_joint_td_gt_lewm_cube_train.yaml`](configs/experiment/e2e_joint_td_gt_lewm_cube_train.yaml)。
+当前正式运行的方法是 **Aligned E2E MC-GT-LeWM**：不加载 LeWM checkpoint 或 latent
+cache，从 Cube 原始图像和随机初始化开始联合训练 LeWM 与 GoalTailValue。LeWM 原始
+prediction MSE 和 SIGReg 使用 128 条独立的 4-frame clip；另一个 16 条 long-clip 数据流
+在同一次 optimizer update 中监督 predicted terminal history 上的有限未来 MC tail。EMA
+world model 提供稳定 target representation，value 架构严格保证
+`V(h, z_current) = 0`。锁定训练协议见
+[`configs/experiment/aligned_e2e_mc_gt_lewm_cube_train.yaml`](configs/experiment/aligned_e2e_mc_gt_lewm_cube_train.yaml)。
+
+第一版 **E2E Joint TD-GT-LeWM** 已完成单 seed 训练与 CEM 评测，但其相关窗口伪 batch、
+缺失零边界和 `o25` 评测没有严格实现预期 formulation。负结果与适用结论记录在
+[`reports/e2e_joint_td_gt_lewm_cube_seed3072.md`](reports/e2e_joint_td_gt_lewm_cube_seed3072.md)。
 
 旧的 **Joint TD-GT-LeWM** checkpoint 初始化实验只属于 frozen-representation dynamics
 fine-tuning 诊断，不是端到端正式方法，也不能作为正式训练结果。

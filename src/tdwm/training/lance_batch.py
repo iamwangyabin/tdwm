@@ -755,3 +755,46 @@ class EpisodeStreamingBatchDataset(IterableDataset):
             with budget:
                 budget.notify_all()
             producer.join(timeout=2.0)
+
+
+class PairedEpisodeStreamingBatchDataset(IterableDataset):
+    """Pair independently sampled short and long Cube batches per update.
+
+    Each child already emits a fully collated batch. Keeping the streams
+    independent lets the LeWM loss retain a large, trajectory-diverse short
+    batch while a smaller long-sequence batch supplies the goal-tail target.
+    """
+
+    def __init__(
+        self,
+        world: EpisodeStreamingBatchDataset,
+        tail: EpisodeStreamingBatchDataset,
+    ) -> None:
+        if not isinstance(world, EpisodeStreamingBatchDataset) or not isinstance(
+            tail, EpisodeStreamingBatchDataset
+        ):
+            raise TypeError("Paired streams must be EpisodeStreamingBatchDataset.")
+        self.world = world
+        self.tail = tail
+
+    def __len__(self) -> int:
+        return min(len(self.world), len(self.tail))
+
+    def set_epoch(self, epoch: int) -> None:
+        self.world.set_epoch(epoch)
+        self.tail.set_epoch(epoch)
+
+    def __iter__(self):
+        world_iterator = iter(self.world)
+        tail_iterator = iter(self.tail)
+        try:
+            for _ in range(len(self)):
+                yield {
+                    "world": next(world_iterator),
+                    "tail": next(tail_iterator),
+                }
+        finally:
+            for iterator in (world_iterator, tail_iterator):
+                close = getattr(iterator, "close", None)
+                if close is not None:
+                    close()

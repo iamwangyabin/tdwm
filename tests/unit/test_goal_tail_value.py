@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from tdwm.methods.goal_tail_value import (
+    BoundaryAnchoredGoalTailValue,
     GoalTailValue,
     build_goal_tail_history,
     latent_goal_cost,
@@ -119,6 +120,31 @@ def test_goal_tail_value_is_the_requested_two_hidden_layer_mlp():
     assert prediction.shape == (4,)
     assert sum(isinstance(module, nn.Linear) for module in value.net) == 3
     assert sum(isinstance(module, nn.SiLU) for module in value.net) == 2
+
+
+def test_boundary_anchored_value_is_nonnegative_and_exactly_zero_at_current():
+    torch.manual_seed(7)
+    value = BoundaryAnchoredGoalTailValue(
+        history_dim=11,
+        goal_dim=2,
+        history_size=3,
+        hidden_dim=8,
+    )
+    history = torch.randn(5, 11, requires_grad=True)
+    current = value.current_latent(history)
+    other_goal = torch.randn(5, 2)
+
+    boundary = value(history, current)
+    prediction = value(history, other_goal)
+    prediction.mean().backward()
+
+    assert torch.equal(boundary, torch.zeros_like(boundary))
+    assert torch.all(prediction >= 0)
+    assert history.grad is not None
+    assert sum(parameter.numel() for parameter in value.parameters()) == sum(
+        parameter.numel()
+        for parameter in GoalTailValue(11, 2, hidden_dim=8).parameters()
+    )
 
 
 def test_optimizer_contains_only_value_parameters():

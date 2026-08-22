@@ -7,6 +7,7 @@ import numpy as np
 from tdwm.training.lance_batch import (
     BlockPrefetchBatchDataset,
     EpisodeStreamingBatchDataset,
+    PairedEpisodeStreamingBatchDataset,
     StrideAwareLanceDataset,
     build_stride_batch_plan,
 )
@@ -370,6 +371,41 @@ class EpisodeStreamingBatchDatasetTest(unittest.TestCase):
         ]
         self.assertEqual(unique_counts[:4], [4, 4, 4, 4])
         self.assertEqual(unique_counts[-3:], [2, 2, 2])
+
+
+class PairedEpisodeStreamingBatchDatasetTest(unittest.TestCase):
+    class FakeStream(EpisodeStreamingBatchDataset):
+        def __init__(self, name, size):
+            self.name = name
+            self.size = size
+            self.epoch = 0
+
+        def __len__(self):
+            return self.size
+
+        def set_epoch(self, epoch):
+            self.epoch = epoch
+
+        def __iter__(self):
+            for index in range(self.size):
+                yield {"sample": f"{self.name}-{self.epoch}-{index}"}
+
+    def test_pairs_independent_views_and_uses_the_shorter_epoch(self):
+        world = self.FakeStream("world", 3)
+        tail = self.FakeStream("tail", 5)
+        paired = PairedEpisodeStreamingBatchDataset(world, tail)
+        paired.set_epoch(4)
+
+        batches = list(paired)
+
+        self.assertEqual(len(paired), 3)
+        self.assertEqual(
+            batches[2],
+            {
+                "world": {"sample": "world-4-2"},
+                "tail": {"sample": "tail-4-2"},
+            },
+        )
 
 
 if __name__ == "__main__":

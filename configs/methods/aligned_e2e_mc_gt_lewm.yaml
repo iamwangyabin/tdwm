@@ -1,0 +1,13 @@
+method: aligned_e2e_mc_gt_lewm
+display_name: Aligned E2E MC-GT-LeWM
+base_model: lewm
+environment: cube
+training: joint_from_random_initialization
+tail:
+  type: boundary_anchored_scalar_mc_value
+  continuation_policy: offline_dataset_behavior
+  input: predicted_terminal_history_and_goal
+  target_representation: ema_world_model
+planning:
+  base_cost: unchanged_lewm_terminal_goal_distance
+  tail_cost: boundary_anchored_goal_tail_value

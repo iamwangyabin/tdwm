@@ -53,6 +53,68 @@ class GoalTailValue(nn.Module):
         return self.net(torch.cat((history, goal), dim=-1)).squeeze(-1)
 
 
+class BoundaryAnchoredGoalTailValue(nn.Module):
+    """Non-negative goal tail with an exact ``V(h, z_current) = 0`` boundary.
+
+    A shared scalar potential is evaluated once at the requested goal and once
+    at the current latent stored in the history. Squaring their difference
+    makes the value non-negative and enforces the terminal boundary by
+    construction instead of relying on a soft penalty seen during training.
+    """
+
+    def __init__(
+        self,
+        history_dim: int,
+        goal_dim: int,
+        history_size: int,
+        hidden_dim: int = 512,
+    ) -> None:
+        super().__init__()
+        if history_dim <= 0 or goal_dim <= 0 or hidden_dim <= 0:
+            raise ValueError("history_dim, goal_dim, and hidden_dim must be positive.")
+        if history_size <= 0:
+            raise ValueError("history_size must be positive.")
+        if history_dim < history_size * goal_dim:
+            raise ValueError("history_dim does not contain the latent history.")
+        self.history_dim = int(history_dim)
+        self.goal_dim = int(goal_dim)
+        self.history_size = int(history_size)
+        self.hidden_dim = int(hidden_dim)
+        self.net = nn.Sequential(
+            nn.Linear(self.history_dim + self.goal_dim, self.hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.SiLU(),
+            nn.Linear(self.hidden_dim, 1),
+        )
+
+    def current_latent(self, history: torch.Tensor) -> torch.Tensor:
+        """Return the final latent from a flattened LeWM history."""
+
+        if history.shape[-1] != self.history_dim:
+            raise ValueError(
+                f"Expected history final dimension {self.history_dim}, "
+                f"found {history.shape[-1]}."
+            )
+        start = (self.history_size - 1) * self.goal_dim
+        return history[..., start : start + self.goal_dim]
+
+    def _potential(self, history: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+        return self.net(torch.cat((history, goal), dim=-1)).squeeze(-1)
+
+    def forward(self, history: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+        if history.shape[:-1] != goal.shape[:-1]:
+            raise ValueError("history and goal must share their leading dimensions.")
+        if goal.shape[-1] != self.goal_dim:
+            raise ValueError(
+                f"Expected goal final dimension {self.goal_dim}, "
+                f"found {goal.shape[-1]}."
+            )
+        current = self.current_latent(history)
+        delta = self._potential(history, goal) - self._potential(history, current)
+        return delta.square()
+
+
 def build_goal_tail_history(
     latents: torch.Tensor,
     actions: torch.Tensor,
