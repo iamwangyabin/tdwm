@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Reward-Free Successor LeWM 最终方案：用显式动作前缀统一多步 latent 预测与目标价值。">
+  <title>Reward-Free Successor LeWM | 最终方案</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="successor-lewm.css">
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']]
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script defer src="successor-lewm.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="返回 World Model Lab">
+      <span class="brand-mark" aria-hidden="true">SF</span>
+      <span>World Model Lab</span>
+    </a>
+    <nav aria-label="页面目录">
+      <a href="#scheme">方案</a>
+      <a href="#unification">统一</a>
+      <a href="#training">训练</a>
+      <a href="#boundary">边界</a>
+    </nav>
+    <span class="status">FINAL CONCEPT · NOT YET BENCHMARKED</span>
+  </header>
+
+  <main>
+    <section class="intro" aria-labelledby="page-title">
+      <div class="intro-title">
+        <p class="kicker">REWARD-FREE WORLD MODEL / FINAL DESIGN</p>
+        <h1 id="page-title">Successor-Feature LeWM</h1>
+      </div>
+      <p class="intro-lede">给定当前观测和一条明确的候选动作序列，模型同时预测每一步会到哪里，以及沿途累计看见了什么。目标价值不再单独学习，而是从累计特征中直接投影出来。</p>
+    </section>
+
+    <section class="definition-band" aria-label="方法定义">
+      <div>
+        <span>输入</span>
+        <strong>当前历史 + 候选动作前缀</strong>
+        <code>h<sub>t</sub>, A<sub>1:h</sub></code>
+      </div>
+      <div>
+        <span>双重输出</span>
+        <strong>未来 latent + 累计未来特征</strong>
+        <code>z&#770;<sub>t+1:t+K</sub>, S&#770;<sub>1:K</sub></code>
+      </div>
+      <div>
+        <span>规划器</span>
+        <strong>CEM 比较显式动作序列</strong>
+        <code>arg min<sub>A</sub> C<sub>h</sub>(A, g)</code>
+      </div>
+    </section>
+
+    <section class="section" id="scheme">
+      <div class="section-heading">
+        <p class="section-index">01 / THE SCHEME</p>
+        <h2>同一条动作前缀，产生两个互相校准的视角。</h2>
+        <p>LeWM 保留反事实 rollout；successor head 把同一段未来压缩成可直接用于目标评分的向量。</p>
+      </div>
+
+      <div class="pipeline" aria-label="Successor-Feature LeWM 数据流">
+        <figure class="observation-node">
+          <img src="assets/cube.gif" alt="Cube manipulation 环境中的当前观测">
+          <figcaption><b>当前观测</b><span>编码为历史 h<sub>t</sub></span></figcaption>
+        </figure>
+
+        <div class="flow-arrow" aria-hidden="true">+</div>
+
+        <div class="action-node flow-node">
+          <span class="node-label">EXPLICIT ACTION PREFIX</span>
+          <div class="action-strip" aria-label="候选动作序列">
+            <i>a<sub>t</sub></i><i>a<sub>t+1</sub></i><i>a<sub>t+2</sub></i><i>...</i>
+          </div>
+          <b>CEM 提出的候选</b>
+        </div>
+
+        <div class="flow-arrow" aria-hidden="true">→</div>
+
+        <div class="model-node flow-node">
+          <span class="node-label">SHARED ACTION-PREFIX MODEL</span>
+          <strong>Reward-Free<br>Successor LeWM</strong>
+          <span>只消费动作，不生成动作</span>
+        </div>
+
+        <div class="branch-output">
+          <div class="output-row latent-output">
+            <span class="output-tag">WHERE</span>
+            <div><b>多步 latent</b><code>z&#770;<sub>t+1</sub> ... z&#770;<sub>t+K</sub></code></div>
+          </div>
+          <div class="output-row successor-output">
+            <span class="output-tag">WHAT ACCUMULATES</span>
+            <div><b>多时域 successor</b><code>S&#770;<sub>1</sub> ... S&#770;<sub>K</sub></code></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="representation-key" aria-label="两种表示的分工">
+        <div><b>z：动力学 latent</b><span>保留执行动作以后“会到哪里”的状态信息。</span></div>
+        <div><b>ψ = norm(q(z))：目标特征</b><span>由 latent 投影并归一化，只负责累计与目标评分。</span></div>
+      </div>
+
+      <div class="plain-conclusion">
+        <strong>它为什么仍然是 world model？</strong>
+        <p>接口始终是“状态 + 候选动作 → 未来”。动作由 CEM 提供，模型没有 π<sub>g</sub> actor，也没有偷偷假设第 <i>K</i> 步之后由谁继续行动。</p>
+      </div>
+    </section>
+
+    <section class="section unification-section" id="unification">
+      <div class="section-heading light-heading">
+        <p class="section-index">02 / ONE REPRESENTATION, MANY VALUES</p>
+        <h2>价值不再是第二套监督，而是 successor 的目标投影。</h2>
+        <p>下面的 horizon 控制同一个动作前缀展开到第几步。一步是锚点，多步只是继续累计。</p>
+      </div>
+
+      <div class="horizon-lab">
+        <div class="horizon-control">
+          <label for="horizon">有限时域 <output id="horizon-value" for="horizon">h = 3</output></label>
+          <input id="horizon" type="range" min="1" max="5" value="3" step="1">
+          <div class="range-labels" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+        </div>
+
+        <div class="latent-timeline" id="latent-timeline" aria-label="多步 latent 时间线">
+          <div class="latent-step active" data-step="1"><span>1</span><b>ψ<sub>t+1</sub></b><small>γ<sup>0</sup></small></div>
+          <div class="timeline-link active" data-link="1" aria-hidden="true"></div>
+          <div class="latent-step active" data-step="2"><span>2</span><b>ψ<sub>t+2</sub></b><small>γ<sup>1</sup></small></div>
+          <div class="timeline-link active" data-link="2" aria-hidden="true"></div>
+          <div class="latent-step active" data-step="3"><span>3</span><b>ψ<sub>t+3</sub></b><small>γ<sup>2</sup></small></div>
+          <div class="timeline-link" data-link="3" aria-hidden="true"></div>
+          <div class="latent-step" data-step="4"><span>4</span><b>ψ<sub>t+4</sub></b><small>γ<sup>3</sup></small></div>
+          <div class="timeline-link" data-link="4" aria-hidden="true"></div>
+          <div class="latent-step" data-step="5"><span>5</span><b>ψ<sub>t+5</sub></b><small>γ<sup>4</sup></small></div>
+        </div>
+
+        <div class="equation-pair">
+          <article>
+            <span class="equation-label">累计未来特征</span>
+            <div class="dynamic-equation" id="successor-equation" aria-live="polite">
+              Ŝ<sub>3</sub> = ψ̂<sub>t+1</sub> + γψ̂<sub>t+2</sub> + γ<sup>2</sup>ψ̂<sub>t+3</sub>
+            </div>
+          </article>
+          <article>
+            <span class="equation-label">任意目标的有限时域 cost</span>
+            <div class="dynamic-equation" id="cost-equation" aria-live="polite">
+              Ĉ<sub>3</sub>(A,g) = 1 - Ŝ<sub>3</sub><sup>T</sup>ψ(g) / Z<sub>3</sub>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="derivation">
+        <div>
+          <span class="derivation-label">单位归一化以后</span>
+          <div class="display-math">
+            \[
+              \frac{1}{2}\lVert \psi(s)-\psi(g)\rVert_2^2
+              = 1-\psi(s)^\top\psi(g)
+            \]
+          </div>
+        </div>
+        <div class="derivation-arrow" aria-hidden="true">→</div>
+        <div>
+          <span class="derivation-label">所以整个 horizon 的 cost</span>
+          <div class="display-math">
+            \[
+              C_h(A,g)=1-\frac{S_h(A)^\top\psi(g)}{Z_h},
+              \quad Z_h=\sum_{j=1}^{h}\gamma^{j-1}
+            \]
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="training">
+      <div class="section-heading">
+        <p class="section-index">03 / TRAINING</p>
+        <h2>三条损失，各自只负责一件事。</h2>
+        <p>训练只使用离线观测与动作序列，不使用环境 reward，也不需要 goal-specific scalar value 标签。</p>
+      </div>
+
+      <div class="loss-list">
+        <article>
+          <span class="loss-number">L1</span>
+          <div><h3>多步 latent 监督</h3><p>每个 horizon 都对齐真实未来的 EMA latent，回答“执行这段动作会到哪里”。</p></div>
+          <code>Σ<sub>h</sub> || ẑ<sub>t+h</sub> - z̄<sub>t+h</sub> ||²</code>
+        </article>
+        <article>
+          <span class="loss-number">L2</span>
+          <div><h3>多时域 successor 监督</h3><p>直接对齐真实轨迹上的折扣特征和，给长期累计量独立的真实锚点。</p></div>
+          <code>Σ<sub>h</sub> || Ŝ<sub>h</sub> - Σ<sub>j≤h</sub> γ<sup>j-1</sup>ψ̄<sub>t+j</sub> ||²</code>
+        </article>
+        <article>
+          <span class="loss-number">L3</span>
+          <div><h3>重叠一致性</h3><p>successor head 与模型自己 rollout 出来的 latent 累计保持一致，避免两条分支各说各话。</p></div>
+          <code>Σ<sub>h</sub> || Ŝ<sub>h</sub> - Σ<sub>j≤h</sub> γ<sup>j-1</sup>ψ̂<sub>t+j</sub> ||²</code>
+        </article>
+      </div>
+
+      <div class="total-loss">
+        <span>完整训练目标</span>
+        <div class="display-math">
+          \[
+            \mathcal L
+            = \mathcal L_{\mathrm{SIGReg}}
+            + \mathcal L_{\mathrm{latent}}
+            + \lambda_S\mathcal L_{\mathrm{SF}}
+            + \lambda_C\mathcal L_{\mathrm{cons}}
+          \]
+        </div>
+      </div>
+    </section>
+
+    <section class="section boundary-section" id="boundary">
+      <div class="section-heading light-heading">
+        <p class="section-index">04 / METHOD BOUNDARY</p>
+        <h2>借 TD-JEPA 的代数，不继承它的隐含策略。</h2>
+      </div>
+
+      <div class="comparison" role="table" aria-label="原始 TD-JEPA 与最终方案对比">
+        <div class="comparison-row comparison-head" role="row">
+          <div role="columnheader">维度</div>
+          <div role="columnheader">原始 TD-JEPA</div>
+          <div role="columnheader">最终方案</div>
+        </div>
+        <div class="comparison-row" role="row"><div role="cell">未来动作</div><div role="cell">由策略 π<sub>z</sub> 继续</div><div role="cell">由显式 A<sub>1:h</sub> 给出</div></div>
+        <div class="comparison-row" role="row"><div role="cell">长期输出</div><div role="cell">无限时域期望 occupancy</div><div role="cell">S<sub>1</sub>, …, S<sub>K</sub> 有限时域序列</div></div>
+        <div class="comparison-row" role="row"><div role="cell">部署方式</div><div role="cell">goal-conditioned actor</div><div role="cell">LeWM rollout + CEM</div></div>
+        <div class="comparison-row" role="row"><div role="cell">方法身份</div><div role="cell">zero-shot RL / implicit model</div><div role="cell">reward-free explicit world model</div></div>
+      </div>
+
+      <div class="limits">
+        <article><span>01</span><h3>没有免费 tail</h3><p>只给 <i>K</i> 步动作，就只回答 <i>K</i> 步价值；超过 <i>K</i> 仍需更多动作或显式 continuation policy。</p></article>
+        <article><span>02</span><h3>规划仍会遇到 OOD</h3><p>CEM 可能搜索训练数据没有覆盖的动作组合，必须单独审计候选动作上的模型误差。</p></article>
+        <article><span>03</span><h3>联合训练可能冲突</h3><p>successor loss 可能改变 LeWM 几何，应使用 EMA target、独立 head 和受控的损失权重。</p></article>
+      </div>
+
+      <div class="final-statement">
+        <span>最终语义</span>
+        <strong>预测“这条动作序列的未来”，再把同一段未来投影成“对这个目标有多好”。</strong>
+        <p>不是 latent loss 加一个陌生的 value loss，而是同一个未来表示的向量监督与标量读出。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Reward-Free Successor LeWM · Inspired by <a href="https://arxiv.org/abs/2510.00739" target="_blank" rel="noreferrer">TD-JEPA</a></p>
+    <p>方法尚需与 LeWM baseline 进行受控、多随机种子实验后才能形成性能结论。</p>
+  </footer>
+</body>
+</html>
