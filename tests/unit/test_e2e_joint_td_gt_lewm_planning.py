@@ -5,6 +5,9 @@ import torch
 from tdwm.adapters.e2e_joint_td_gt_lewm import (
     load_e2e_joint_td_goal_tail_value,
 )
+from tdwm.evaluation.e2e_joint_td_gt_lewm import (
+    load_e2e_joint_td_gt_evaluation_protocol,
+)
 from tdwm.methods.goal_tail_value import GoalTailValue
 
 
@@ -35,3 +38,16 @@ def test_e2e_deployment_checkpoint_restores_value_and_requires_world_model(tmp_p
     assert "world_model_state_dict" in payload
     for name, parameter in value.state_dict().items():
         assert torch.equal(parameter, restored.state_dict()[name])
+
+
+def test_e2e_formal_evaluation_uses_selected_joint_epoch_and_unchanged_cem():
+    protocol = load_e2e_joint_td_gt_evaluation_protocol(
+        "configs/experiment/e2e_joint_td_gt_lewm_cube_seed3072_o25.yaml"
+    )
+
+    assert protocol["base_checkpoint"]["initialization"] == "random_from_scratch"
+    assert protocol["base_checkpoint"]["epoch"] == 9
+    assert protocol["value_checkpoint"]["epoch"] == 9
+    assert protocol["planning"]["candidates"] == 300
+    assert protocol["planning"]["iterations"] == 30
+    assert protocol["evaluation"]["episodes"] == 50
