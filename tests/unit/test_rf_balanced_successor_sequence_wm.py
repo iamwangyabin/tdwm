@@ -123,6 +123,26 @@ def test_group_balanced_protocols_lock_the_single_changed_factor():
     assert training["joint_objective"]["successor_sequence_weight"] == 1.0
 
 
+def test_group_balanced_projected_query_changes_only_the_goal_query():
+    standard = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_balanced_successor_sequence_wm_cube_checkpoint_o50.yaml"
+    )
+    projected = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_balanced_successor_sequence_wm_cube_projected_o50.yaml"
+    )
+
+    assert (
+        projected["successor"]["planning_query"]
+        == "manifold_projected_successor"
+    )
+    projected["successor"].pop("planning_query")
+    for key in ("id", "display_name", "inference_objective", "provenance"):
+        projected[key] = standard[key]
+    assert projected == standard
+
+
 def test_pilot_mode_uses_a_fixed_short_budget_without_mutating_formal_protocol():
     protocol = load_rf_successor_evaluation_protocol(
         "configs/experiment/"
