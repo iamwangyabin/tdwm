@@ -153,6 +153,22 @@ def test_manifold_evaluation_protocol_uses_only_the_derived_successor():
     assert protocol["inference_objective"]["autoregressive_rollout"] == "disabled"
 
 
+def test_manifold_terminal_protocol_changes_only_the_goal_query():
+    standard = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_manifold_prefix_successor_wm_cube_checkpoint_o50.yaml"
+    )
+    terminal = load_rf_successor_evaluation_protocol(
+        "configs/experiment/rf_manifold_prefix_successor_wm_cube_terminal_o50.yaml"
+    )
+
+    assert terminal["successor"]["planning_query"] == "terminal_moment"
+    terminal["successor"].pop("planning_query")
+    for key in ("id", "display_name", "inference_objective", "provenance"):
+        terminal[key] = standard[key]
+    assert terminal == standard
+
+
 def test_manifold_prefix_checkpoint_round_trip(tmp_path):
     head = _small_head()
     config = {
