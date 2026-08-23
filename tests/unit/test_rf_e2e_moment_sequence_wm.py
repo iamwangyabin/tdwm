@@ -94,6 +94,24 @@ def test_e2e_terminal_query_protocol_changes_only_the_goal_query():
     assert terminal == standard
 
 
+def test_e2e_projected_query_protocol_changes_only_the_goal_query():
+    standard = load_rf_successor_evaluation_protocol(
+        "configs/experiment/rf_e2e_moment_sequence_wm_cube_checkpoint_o50.yaml"
+    )
+    projected = load_rf_successor_evaluation_protocol(
+        "configs/experiment/rf_e2e_moment_sequence_wm_cube_projected_o50.yaml"
+    )
+
+    assert (
+        projected["successor"]["planning_query"]
+        == "manifold_projected_successor"
+    )
+    projected["successor"].pop("planning_query")
+    for key in ("id", "display_name", "inference_objective", "provenance"):
+        projected[key] = standard[key]
+    assert projected == standard
+
+
 def test_e2e_moment_checkpoint_round_trip(tmp_path):
     head = ActionPrefixMomentHead(
         embed_dim=4,

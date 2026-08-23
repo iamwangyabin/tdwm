@@ -217,6 +217,41 @@ def test_planner_can_query_the_terminal_predicted_moment():
     assert torch.allclose(cost, torch.tensor([[8.0]]))
 
 
+def test_planner_can_project_predicted_moments_onto_exact_latent_geometry():
+    head = ActionPrefixMomentHead(
+        embed_dim=2,
+        action_dim=1,
+        history_size=1,
+        hidden_dim=4,
+        gamma=1.0,
+    )
+
+    def inconsistent_moments(history, actions):
+        del history
+        latent = torch.tensor([[2.0, 0.0], [4.0, 0.0]], device=actions.device)
+        moments = successor_feature_basis(latent).to(actions)
+        moments[..., -2] = 0.0
+        return moments.expand(*actions.shape[:-2], -1, -1)
+
+    head.predict_moments = inconsistent_moments
+    adapter = RewardFreeSuccessorLeWM(
+        FakeWorldModel(torch.zeros(1, 1, 1, 2)),
+        head,
+        max_horizon=2,
+        clamp_successor_cost=False,
+        planning_query="manifold_projected_successor",
+    )
+    info = {
+        "pixels": torch.zeros(1, 1, 1, 2),
+        "goal_emb": torch.zeros(1, 1, 2),
+    }
+
+    cost = adapter.get_cost(info, torch.zeros(1, 1, 2, 1))
+
+    # Reprojection ignores the inconsistent norm and averages costs 2 and 8.
+    assert torch.allclose(cost, torch.tensor([[5.0]]))
+
+
 def test_reward_free_successor_checkpoint_round_trip(tmp_path):
     head = ActionPrefixSuccessorHead(
         embed_dim=4, action_dim=3, history_size=2, hidden_dim=6

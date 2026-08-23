@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,13 @@ from torch import nn
 from tdwm.methods.rf_successor_lewm import (
     ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
+    finite_horizon_successor_from_moments,
 )
-from tdwm.methods.successor_geometry import latent_goal_cost, successor_goal_cost
+from tdwm.methods.successor_geometry import (
+    latent_goal_cost,
+    successor_feature_basis,
+    successor_goal_cost,
+)
 
 
 class RewardFreeSuccessorLeWM(nn.Module):
@@ -36,12 +42,17 @@ class RewardFreeSuccessorLeWM(nn.Module):
             raise ValueError("Planning weights must be non-negative.")
         if successor_weight + terminal_weight <= 0.0:
             raise ValueError("At least one planning cost must have positive weight.")
-        if planning_query not in {"discounted_successor", "terminal_moment"}:
+        if planning_query not in {
+            "discounted_successor",
+            "manifold_projected_successor",
+            "terminal_moment",
+        }:
             raise ValueError("Unsupported reward-free planning query.")
-        if planning_query == "terminal_moment" and not hasattr(
-            successor, "predict_moments"
+        if (
+            planning_query != "discounted_successor"
+            and not hasattr(successor, "predict_moments")
         ):
-            raise ValueError("Terminal-moment planning requires a moment head.")
+            raise ValueError("The selected planning query requires a moment head.")
         self.world_model = world_model
         self.successor = successor
         self.max_horizon = int(max_horizon)
@@ -121,12 +132,21 @@ class RewardFreeSuccessorLeWM(nn.Module):
             history = self._encoded_history_for_samples(
                 info_dict, batch=batch, samples=samples
             )
-        if self.planning_query == "terminal_moment":
-            score_features = self.successor.predict_moments(
-                history, action_candidates
-            )[..., -1, :]
-        else:
+        if self.planning_query == "discounted_successor":
             score_features = self.successor(history, action_candidates)[..., -1, :]
+        else:
+            moments = self.successor.predict_moments(history, action_candidates)
+            if self.planning_query == "terminal_moment":
+                score_features = moments[..., -1, :]
+            else:
+                latent = moments[..., : self.successor.embed_dim] * math.sqrt(
+                    self.successor.embed_dim
+                )
+                projected_moments = successor_feature_basis(latent)
+                score_features = finite_horizon_successor_from_moments(
+                    projected_moments,
+                    gamma=self.successor.gamma,
+                )[..., -1, :]
         goal = self._goal_for_samples(info_dict, batch=batch, samples=samples)
         successor_cost = successor_goal_cost(score_features, goal)
         if self.clamp_successor_cost:
