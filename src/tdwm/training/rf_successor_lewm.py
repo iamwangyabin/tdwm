@@ -47,7 +47,10 @@ from tdwm.training.lewm import _git_revision
 METHOD = "rf_successor_lewm"
 S_ONLY_METHOD = "rf_successor_sequence_wm"
 BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
-SEQUENCE_METHODS = frozenset((S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD))
+EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
+SEQUENCE_METHODS = frozenset(
+    (S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD, EMA_BALANCED_SEQUENCE_METHOD)
+)
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
 
 
@@ -112,7 +115,11 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             "single_step": "horizon_one_successor",
             "multi_step_prediction": "recovered_from_successor_increments",
             "consistency": "architectural_discounted_cumsum",
-            "target_encoder": "online_end_to_end",
+            "target_encoder": (
+                "ema_stop_gradient"
+                if method == EMA_BALANCED_SEQUENCE_METHOD
+                else "online_end_to_end"
+            ),
             "goal_conditioning": "none",
             "policy": "none",
             "bootstrap": "none",
@@ -129,6 +136,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             METHOD: 1,
             S_ONLY_METHOD: 2,
             BALANCED_SEQUENCE_METHOD: 3,
+            EMA_BALANCED_SEQUENCE_METHOD: 4,
         }[method],
         "architecture": (
             "causal_gru_action_prefix"
@@ -137,11 +145,12 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         ),
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
-        "target": (
-            "direct_monte_carlo"
-            if method == METHOD
-            else "online_direct_monte_carlo"
-        ),
+        "target": {
+            METHOD: "direct_monte_carlo",
+            S_ONLY_METHOD: "online_direct_monte_carlo",
+            BALANCED_SEQUENCE_METHOD: "online_direct_monte_carlo",
+            EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
+        }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
         "continuation_policy": "none",
@@ -149,7 +158,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     }
     if method in SEQUENCE_METHODS:
         locked["latent_recovery"] = "exact_adjacent_successor_difference"
-    if method == BALANCED_SEQUENCE_METHOD:
+    if method in {BALANCED_SEQUENCE_METHOD, EMA_BALANCED_SEQUENCE_METHOD}:
         locked["feature_group_reduction"] = "group_sum"
     for key, value in locked.items():
         if successor.get(key) != value:
@@ -168,6 +177,10 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError("target_world_ema_decay must lie in [0, 1).")
         if not 0.0 <= float(successor.get("loss_warmup_fraction", -1.0)) < 1.0:
             raise ValueError("loss_warmup_fraction must lie in [0, 1).")
+    if method == EMA_BALANCED_SEQUENCE_METHOD and not 0.0 <= float(
+        successor.get("target_world_ema_decay", -1.0)
+    ) < 1.0:
+        raise ValueError("target_world_ema_decay must lie in [0, 1).")
     planning_weight = float(successor.get("planning_weight", -1.0))
     terminal_weight = float(successor.get("terminal_weight", -1.0))
     if min(planning_weight, terminal_weight) < 0.0:
@@ -615,6 +628,15 @@ def _build_successor_sequence_training_module(
                 module = getattr(self.model, name, None)
                 if module is not None:
                     module.requires_grad_(False)
+            self.use_ema_target = (
+                protocol["method"] == EMA_BALANCED_SEQUENCE_METHOD
+            )
+            if self.use_ema_target:
+                self.target_model = copy.deepcopy(self.model).requires_grad_(False)
+                self.target_model.eval()
+                self.target_world_ema_decay = float(
+                    protocol["successor"]["target_world_ema_decay"]
+                )
             self.device_image_preprocessing = device_image_preprocessing
             if device_image_preprocessing:
                 image = protocol["image_preprocessing"]
@@ -648,6 +670,13 @@ def _build_successor_sequence_training_module(
             self.horizon = int(protocol["sequence"]["rollout_horizon"])
             self.gamma = float(successor["gamma"])
 
+        def train(self, mode: bool = True):
+            super().train(mode)
+            target_model = getattr(self, "target_model", None)
+            if target_model is not None:
+                target_model.eval()
+            return self
+
         def _preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
             if not self.device_image_preprocessing:
                 return pixels
@@ -673,9 +702,15 @@ def _build_successor_sequence_training_module(
             if embeddings.shape[1] != expected_steps:
                 raise RuntimeError("The encoded clip has an unexpected length.")
 
+            target_embeddings = embeddings
+            target_model = getattr(self, "target_model", None)
+            if target_model is not None:
+                with torch.no_grad():
+                    target_embeddings = target_model.encode(encoder_input)["emb"]
+
             windows = build_multi_horizon_windows(
                 embeddings,
-                embeddings,
+                target_embeddings,
                 actions,
                 history_size=self.history_size,
                 horizon=self.horizon,
@@ -748,6 +783,16 @@ def _build_successor_sequence_training_module(
         def validation_step(self, batch: dict[str, Any], batch_idx: int):
             del batch_idx
             return self._forward_loss(batch, "validation")
+
+        def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
+            del outputs, batch, batch_idx
+            target_model = getattr(self, "target_model", None)
+            if target_model is not None:
+                ema_update_world_model(
+                    target_model,
+                    self.model,
+                    decay=self.target_world_ema_decay,
+                )
 
         def configure_optimizers(self):
             optimizer_cfg = protocol["optimizer"]
@@ -1287,6 +1332,7 @@ def train_rf_successor_lewm(
 __all__ = [
     "METHOD",
     "BALANCED_SEQUENCE_METHOD",
+    "EMA_BALANCED_SEQUENCE_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "MultiHorizonWindows",

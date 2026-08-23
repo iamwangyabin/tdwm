@@ -105,3 +105,12 @@ For rapid screening, evaluation accepts `--pilot`. It locks a shared budget of
 10 episodes, 128 CEM candidates, 10 iterations, 16 elites, and 100 environment
 steps. This mode is only a successive-halving gate; any selected checkpoint is
 rerun with the unchanged 50-episode formal protocol before reporting a result.
+
+## EMA target controlled variant
+
+`rf_ema_balanced_successor_sequence_wm` keeps the group-balanced architecture,
+loss, optimizer, data, and planner fixed, but computes future targets with a
+stop-gradient EMA copy of the online encoder (`decay = 0.995`). The online
+encoder still receives predictive gradients through the history branch and
+SIGReg. This isolates whether moving both sides of the same prediction error
+causes representation drift; the EMA network is discarded at inference.

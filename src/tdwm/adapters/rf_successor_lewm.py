@@ -212,10 +212,11 @@ def load_rf_successor_checkpoint(
         "rf_successor_lewm",
         "rf_successor_sequence_wm",
         "rf_balanced_successor_sequence_wm",
+        "rf_ema_balanced_successor_sequence_wm",
     }:
         raise ValueError("The checkpoint is not a supported reward-free successor model.")
     objective_version = payload.get("objective_version")
-    if objective_version not in {1, 2, 3}:
+    if objective_version not in {1, 2, 3, 4}:
         raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
@@ -235,18 +236,28 @@ def load_rf_successor_checkpoint(
     if method in {
         "rf_successor_sequence_wm",
         "rf_balanced_successor_sequence_wm",
+        "rf_ema_balanced_successor_sequence_wm",
     }:
-        expected_version = 2 if method == "rf_successor_sequence_wm" else 3
+        expected_version = {
+            "rf_successor_sequence_wm": 2,
+            "rf_balanced_successor_sequence_wm": 3,
+            "rf_ema_balanced_successor_sequence_wm": 4,
+        }[method]
         if objective_version != expected_version or config.get(
             "architecture"
         ) != "causal_gru_successor_increments":
             raise ValueError(
                 "The successor-sequence checkpoint version or architecture differs."
             )
-        if method == "rf_balanced_successor_sequence_wm" and config.get(
-            "feature_group_reduction"
-        ) != "group_sum":
+        if method in {
+            "rf_balanced_successor_sequence_wm",
+            "rf_ema_balanced_successor_sequence_wm",
+        } and config.get("feature_group_reduction") != "group_sum":
             raise ValueError("The balanced checkpoint is missing group-sum reduction.")
+        if method == "rf_ema_balanced_successor_sequence_wm" and not 0.0 <= float(
+            config.get("target_world_ema_decay", -1.0)
+        ) < 1.0:
+            raise ValueError("The EMA checkpoint has an invalid target decay.")
         head = ActionPrefixMomentHead(gamma=float(config["gamma"]), **head_kwargs)
     else:
         if method != "rf_successor_lewm":

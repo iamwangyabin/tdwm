@@ -33,7 +33,10 @@ from tdwm.evaluation.mc_gt_lewm import _load_action_processor
 METHOD = "rf_successor_lewm"
 S_ONLY_METHOD = "rf_successor_sequence_wm"
 BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
-SEQUENCE_METHODS = frozenset((S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD))
+EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
+SEQUENCE_METHODS = frozenset(
+    (S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD, EMA_BALANCED_SEQUENCE_METHOD)
+)
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
 
 
@@ -59,6 +62,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             METHOD: 1,
             S_ONLY_METHOD: 2,
             BALANCED_SEQUENCE_METHOD: 3,
+            EMA_BALANCED_SEQUENCE_METHOD: 4,
         }[method],
         "architecture": (
             "causal_gru_action_prefix"
@@ -67,11 +71,12 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         ),
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
-        "target": (
-            "direct_monte_carlo"
-            if method == METHOD
-            else "online_direct_monte_carlo"
-        ),
+        "target": {
+            METHOD: "direct_monte_carlo",
+            S_ONLY_METHOD: "online_direct_monte_carlo",
+            BALANCED_SEQUENCE_METHOD: "online_direct_monte_carlo",
+            EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
+        }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
         "continuation_policy": "none",
@@ -79,7 +84,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
     }
     if method in SEQUENCE_METHODS:
         expected["latent_recovery"] = "exact_adjacent_successor_difference"
-    if method == BALANCED_SEQUENCE_METHOD:
+    if method in {BALANCED_SEQUENCE_METHOD, EMA_BALANCED_SEQUENCE_METHOD}:
         expected["feature_group_reduction"] = "group_sum"
     for key, value in expected.items():
         if successor.get(key) != value:
@@ -155,14 +160,20 @@ def _validate_successor_config(
         "continuation_policy": successor["continuation_policy"],
         "td_bootstrap": successor["td_bootstrap"],
     }
-    if "latent_recovery" in successor:
-        expected["latent_recovery"] = successor["latent_recovery"]
+    for key in ("latent_recovery", "feature_group_reduction"):
+        if key in successor:
+            expected[key] = successor[key]
     for key, value in expected.items():
         if config.get(key) != value:
             raise ValueError(f"Successor checkpoint {key} differs from protocol.")
     for key in ("gamma", "planning_weight", "terminal_weight"):
         if not np.isclose(float(config[key]), float(successor[key])):
             raise ValueError(f"Successor checkpoint {key} differs from protocol.")
+    if "target_world_ema_decay" in successor and not np.isclose(
+        float(config.get("target_world_ema_decay", -1.0)),
+        float(successor["target_world_ema_decay"]),
+    ):
+        raise ValueError("Successor checkpoint EMA decay differs from protocol.")
 
 
 def _validate_checkpoint_pair(
@@ -421,6 +432,7 @@ def evaluate_rf_successor_lewm(
 
 __all__ = [
     "BALANCED_SEQUENCE_METHOD",
+    "EMA_BALANCED_SEQUENCE_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "configure_rf_successor_evaluation_mode",
