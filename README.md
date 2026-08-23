@@ -22,6 +22,16 @@ fine-tuning 诊断，不是端到端正式方法，也不能作为正式训练�
 LS-LeWM 保留为后续 policy-conditioned successor 方向；其设计见
 [`docs/ls_lewm_method.md`](docs/ls_lewm_method.md)，当前阶段不训练该扩展。
 
+新的 **RF-Successor-LeWM** 已作为独立方法实现。它不复用 LS-LeWM 的
+goal-conditioned policy 或 TD tail：LeWM 对同一候选 action prefix 预测
+`z_1,...,z_K`，causal successor head 预测 `S_1,...,S_K`，EMA future latent 提供
+直接 MC target，并用 successor increment 与同 horizon latent feature 的递推关系
+连接两种监督。训练与评测入口分别是
+[`scripts/train_rf_successor_lewm.py`](scripts/train_rf_successor_lewm.py) 和
+[`scripts/evaluate_rf_successor_lewm.py`](scripts/evaluate_rf_successor_lewm.py)。当前状态是
+实现和测试完成、正式 checkpoint 与受控多 seed 结果尚未产生，因此不作性能声明。
+完整定义见 [`docs/rf_successor_lewm_method.md`](docs/rf_successor_lewm_method.md)。
+
 ## 趋动云上的 LeWM Cube 快速训练
 
 Cube 的训练样本是随机 sequence clip。HDF5 在 `/gemini/data-*` 远程挂载上的随机

@@ -15,11 +15,20 @@ from .local_successor import (
     SuccessorPredictor,
     SuccessorTDOutput,
     future_goal_successor_objective,
+    successor_td_target,
+)
+from .rf_successor_lewm import (
+    ActionPrefixSuccessorHead,
+    MultiHorizonSuccessorOutput,
+    finite_horizon_successor_targets,
+    multi_horizon_successor_objective,
+    successor_recurrence_residual,
+)
+from .successor_geometry import (
     goal_cost_weights,
     latent_goal_cost,
     successor_feature_basis,
     successor_goal_cost,
-    successor_td_target,
 )
 
 __all__ = [
@@ -40,4 +49,9 @@ __all__ = [
     "successor_feature_basis",
     "successor_goal_cost",
     "successor_td_target",
+    "ActionPrefixSuccessorHead",
+    "MultiHorizonSuccessorOutput",
+    "finite_horizon_successor_targets",
+    "multi_horizon_successor_objective",
+    "successor_recurrence_residual",
 ]
