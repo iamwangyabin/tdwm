@@ -398,8 +398,9 @@ def moment_sequence_objective(
     *,
     gamma: float,
     vector_reduction: str = "group_sum",
+    detach_target: bool = True,
 ) -> MomentSequenceOutput:
-    """Supervise every future lifted moment with stop-gradient targets."""
+    """Supervise every future lifted moment with an optional detached target."""
 
     if target_future.shape[:-2] != latent_history.shape[:-2]:
         raise ValueError("future and history leading shapes must match.")
@@ -410,8 +411,8 @@ def moment_sequence_objective(
     if not math.isclose(float(gamma), head.gamma):
         raise ValueError("The objective gamma differs from the head gamma.")
 
-    detached_target = target_future.detach()
-    target_moments = successor_feature_basis(detached_target)
+    objective_target = target_future.detach() if detach_target else target_future
+    target_moments = successor_feature_basis(objective_target)
     moments = head.predict_moments(latent_history, action_prefix)
     prediction = finite_horizon_successor_from_moments(moments, gamma=gamma)
     target = finite_horizon_successor_from_moments(target_moments, gamma=gamma)
@@ -430,7 +431,7 @@ def moment_sequence_objective(
         moment_mse_by_horizon=_mse_by_horizon(moments - target_moments),
         successor_mse_by_horizon=_mse_by_horizon(prediction - target),
         recovered_latent_mse_by_horizon=_mse_by_horizon(
-            recovered_future - detached_target
+            recovered_future - objective_target
         ),
     )
 

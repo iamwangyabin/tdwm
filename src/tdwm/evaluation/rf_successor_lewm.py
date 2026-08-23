@@ -35,12 +35,14 @@ S_ONLY_METHOD = "rf_successor_sequence_wm"
 BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
 EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
 DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
+E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
 SEQUENCE_METHODS = frozenset(
     (
         S_ONLY_METHOD,
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
         DIRECT_MOMENT_METHOD,
+        E2E_MOMENT_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -70,6 +72,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             BALANCED_SEQUENCE_METHOD: 3,
             EMA_BALANCED_SEQUENCE_METHOD: 4,
             DIRECT_MOMENT_METHOD: 5,
+            E2E_MOMENT_METHOD: 6,
         }[method],
         "architecture": (
             "causal_gru_action_prefix"
@@ -84,6 +87,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             BALANCED_SEQUENCE_METHOD: "online_direct_monte_carlo",
             EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
             DIRECT_MOMENT_METHOD: "online_stop_gradient_direct_moments",
+            E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -96,6 +100,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
         DIRECT_MOMENT_METHOD,
+        E2E_MOMENT_METHOD,
     }:
         expected["feature_group_reduction"] = "group_sum"
     for key, value in expected.items():
@@ -445,6 +450,7 @@ def evaluate_rf_successor_lewm(
 __all__ = [
     "BALANCED_SEQUENCE_METHOD",
     "DIRECT_MOMENT_METHOD",
+    "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",

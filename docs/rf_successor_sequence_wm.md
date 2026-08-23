@@ -123,3 +123,9 @@ attenuation of late horizons: `m_1,...,m_K` receive equal predictive weight,
 while `S_1,...,S_K` are still produced by the exact discounted cumulative sum.
 It remains one predictive loss plus SIGReg, with no LeWM dynamics loss, EMA
 network, recurrence penalty, reward, goal, value bootstrap, or policy.
+
+`rf_e2e_moment_sequence_wm` is the paired target-gradient control. It uses the
+same direct all-horizon moment loss and inference path, but lets the prediction
+error update both the history and future online-encoder branches. Comparing it
+with the stop-gradient version isolates target-gradient routing without adding
+another loss or changing the planner.

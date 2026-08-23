@@ -50,12 +50,15 @@ S_ONLY_METHOD = "rf_successor_sequence_wm"
 BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
 EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
 DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
+E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
+DIRECT_MOMENT_METHODS = frozenset((DIRECT_MOMENT_METHOD, E2E_MOMENT_METHOD))
 SEQUENCE_METHODS = frozenset(
     (
         S_ONLY_METHOD,
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
         DIRECT_MOMENT_METHOD,
+        E2E_MOMENT_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -117,13 +120,17 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         if float(objective.get("successor_weight", 0.0)) <= 0.0:
             raise ValueError("The direct successor supervision must remain active.")
     else:
-        if method == DIRECT_MOMENT_METHOD:
+        if method in DIRECT_MOMENT_METHODS:
             expected = {
                 "primitive_prediction": "future_moment_sequence",
                 "single_step": "horizon_one_moment",
                 "multi_step_prediction": "all_horizon_moments",
                 "consistency": "architectural_discounted_cumsum",
-                "target_encoder": "online_stop_gradient",
+                "target_encoder": (
+                    "online_stop_gradient"
+                    if method == DIRECT_MOMENT_METHOD
+                    else "online_end_to_end"
+                ),
                 "goal_conditioning": "none",
                 "policy": "none",
                 "bootstrap": "none",
@@ -159,6 +166,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             BALANCED_SEQUENCE_METHOD: 3,
             EMA_BALANCED_SEQUENCE_METHOD: 4,
             DIRECT_MOMENT_METHOD: 5,
+            E2E_MOMENT_METHOD: 6,
         }[method],
         "architecture": (
             "causal_gru_action_prefix"
@@ -173,6 +181,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             BALANCED_SEQUENCE_METHOD: "online_direct_monte_carlo",
             EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
             DIRECT_MOMENT_METHOD: "online_stop_gradient_direct_moments",
+            E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -185,6 +194,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
         DIRECT_MOMENT_METHOD,
+        E2E_MOMENT_METHOD,
     }:
         locked["feature_group_reduction"] = "group_sum"
     for key, value in locked.items():
@@ -745,7 +755,7 @@ def _build_successor_sequence_training_module(
             vector_reduction = protocol["successor"].get(
                 "feature_group_reduction", "coordinate_mean"
             )
-            if protocol["method"] == DIRECT_MOMENT_METHOD:
+            if protocol["method"] in DIRECT_MOMENT_METHODS:
                 output = moment_sequence_objective(
                     self.successor,
                     windows.history,
@@ -753,6 +763,7 @@ def _build_successor_sequence_training_module(
                     windows.target_future,
                     gamma=self.gamma,
                     vector_reduction=vector_reduction,
+                    detach_target=protocol["method"] == DIRECT_MOMENT_METHOD,
                 )
                 predictive_loss = output.moment_loss
                 predictive_metric = "moment_sequence_loss"
@@ -800,7 +811,7 @@ def _build_successor_sequence_training_module(
                     float(windows.count_per_clip * batch_size)
                 ),
             }
-            if protocol["method"] == DIRECT_MOMENT_METHOD:
+            if protocol["method"] in DIRECT_MOMENT_METHODS:
                 metrics[f"{stage}/moment_mse_h1"] = (
                     output.moment_mse_by_horizon[0].detach()
                 )
@@ -1382,6 +1393,8 @@ __all__ = [
     "METHOD",
     "BALANCED_SEQUENCE_METHOD",
     "DIRECT_MOMENT_METHOD",
+    "DIRECT_MOMENT_METHODS",
+    "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",

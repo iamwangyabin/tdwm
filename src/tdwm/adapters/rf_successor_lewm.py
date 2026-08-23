@@ -214,10 +214,11 @@ def load_rf_successor_checkpoint(
         "rf_balanced_successor_sequence_wm",
         "rf_ema_balanced_successor_sequence_wm",
         "rf_direct_moment_sequence_wm",
+        "rf_e2e_moment_sequence_wm",
     }:
         raise ValueError("The checkpoint is not a supported reward-free successor model.")
     objective_version = payload.get("objective_version")
-    if objective_version not in {1, 2, 3, 4, 5}:
+    if objective_version not in {1, 2, 3, 4, 5, 6}:
         raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
@@ -239,12 +240,14 @@ def load_rf_successor_checkpoint(
         "rf_balanced_successor_sequence_wm",
         "rf_ema_balanced_successor_sequence_wm",
         "rf_direct_moment_sequence_wm",
+        "rf_e2e_moment_sequence_wm",
     }:
         expected_version = {
             "rf_successor_sequence_wm": 2,
             "rf_balanced_successor_sequence_wm": 3,
             "rf_ema_balanced_successor_sequence_wm": 4,
             "rf_direct_moment_sequence_wm": 5,
+            "rf_e2e_moment_sequence_wm": 6,
         }[method]
         if objective_version != expected_version or config.get(
             "architecture"
@@ -256,6 +259,7 @@ def load_rf_successor_checkpoint(
             "rf_balanced_successor_sequence_wm",
             "rf_ema_balanced_successor_sequence_wm",
             "rf_direct_moment_sequence_wm",
+            "rf_e2e_moment_sequence_wm",
         } and config.get("feature_group_reduction") != "group_sum":
             raise ValueError("The balanced checkpoint is missing group-sum reduction.")
         if method == "rf_ema_balanced_successor_sequence_wm" and not 0.0 <= float(
