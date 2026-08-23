@@ -36,6 +36,7 @@ BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
 EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
 DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
 E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
+MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 SEQUENCE_METHODS = frozenset(
     (
         S_ONLY_METHOD,
@@ -43,6 +44,7 @@ SEQUENCE_METHODS = frozenset(
         EMA_BALANCED_SEQUENCE_METHOD,
         DIRECT_MOMENT_METHOD,
         E2E_MOMENT_METHOD,
+        MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -73,12 +75,17 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             EMA_BALANCED_SEQUENCE_METHOD: 4,
             DIRECT_MOMENT_METHOD: 5,
             E2E_MOMENT_METHOD: 6,
+            MANIFOLD_PREFIX_METHOD: 7,
         }[method],
-        "architecture": (
-            "causal_gru_action_prefix"
-            if method == METHOD
-            else "causal_gru_successor_increments"
-        ),
+        "architecture": {
+            METHOD: "causal_gru_action_prefix",
+            S_ONLY_METHOD: "causal_gru_successor_increments",
+            BALANCED_SEQUENCE_METHOD: "causal_gru_successor_increments",
+            EMA_BALANCED_SEQUENCE_METHOD: "causal_gru_successor_increments",
+            DIRECT_MOMENT_METHOD: "causal_gru_successor_increments",
+            E2E_MOMENT_METHOD: "causal_gru_successor_increments",
+            MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+        }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
         "target": {
@@ -88,6 +95,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
             DIRECT_MOMENT_METHOD: "online_stop_gradient_direct_moments",
             E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
+            MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -95,7 +103,11 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         "td_bootstrap": False,
     }
     if method in SEQUENCE_METHODS:
-        expected["latent_recovery"] = "exact_adjacent_successor_difference"
+        expected["latent_recovery"] = (
+            "direct_manifold_latents"
+            if method == MANIFOLD_PREFIX_METHOD
+            else "exact_adjacent_successor_difference"
+        )
     if method in {
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
@@ -110,6 +122,21 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("successor.history_size must be positive.")
     if int(successor.get("max_horizon", 0)) <= 0:
         raise ValueError("successor.max_horizon must be positive.")
+    if method == MANIFOLD_PREFIX_METHOD:
+        architecture_dimensions = (
+            "prefix_depth",
+            "prefix_heads",
+            "prefix_mlp_dim",
+            "predictor_depth",
+            "predictor_mlp_dim",
+            "fusion_dim",
+        )
+        if min(int(successor.get(key, 0)) for key in architecture_dimensions) <= 0:
+            raise ValueError("Manifold-prefix architecture dimensions must be positive.")
+        if int(protocol["model"]["embed_dim"]) % int(successor["prefix_heads"]):
+            raise ValueError("model.embed_dim must be divisible by prefix_heads.")
+        if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
+            raise ValueError("successor.dropout must lie in [0, 1).")
     if not 0.0 <= float(successor.get("gamma", -1.0)) <= 1.0:
         raise ValueError("successor.gamma must lie in [0, 1].")
     if min(
@@ -176,7 +203,6 @@ def _validate_successor_config(
         "architecture": successor["architecture"],
         "embed_dim": protocol["model"]["embed_dim"],
         "history_size": successor["history_size"],
-        "hidden_dim": successor["hidden_dim"],
         "max_horizon": successor["max_horizon"],
         "feature_basis": successor["feature_basis"],
         "horizon_normalization": successor["horizon_normalization"],
@@ -186,6 +212,21 @@ def _validate_successor_config(
         "continuation_policy": successor["continuation_policy"],
         "td_bootstrap": successor["td_bootstrap"],
     }
+    architecture_keys = (
+        (
+            "prefix_depth",
+            "prefix_heads",
+            "prefix_mlp_dim",
+            "predictor_depth",
+            "predictor_mlp_dim",
+            "fusion_dim",
+            "dropout",
+        )
+        if protocol["method"] == MANIFOLD_PREFIX_METHOD
+        else ("hidden_dim",)
+    )
+    for key in architecture_keys:
+        expected[key] = successor[key]
     for key in ("latent_recovery", "feature_group_reduction"):
         if key in successor:
             expected[key] = successor[key]
@@ -461,6 +502,7 @@ __all__ = [
     "DIRECT_MOMENT_METHOD",
     "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
+    "MANIFOLD_PREFIX_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "configure_rf_successor_evaluation_mode",

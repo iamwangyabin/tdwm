@@ -12,6 +12,7 @@ from torch import nn
 from tdwm.methods.rf_successor_lewm import (
     ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
+    ManifoldTransformerMomentHead,
     finite_horizon_successor_from_moments,
 )
 from tdwm.methods.successor_geometry import (
@@ -27,7 +28,11 @@ class RewardFreeSuccessorLeWM(nn.Module):
     def __init__(
         self,
         world_model: nn.Module,
-        successor: ActionPrefixSuccessorHead | ActionPrefixMomentHead,
+        successor: (
+            ActionPrefixSuccessorHead
+            | ActionPrefixMomentHead
+            | ManifoldTransformerMomentHead
+        ),
         *,
         max_horizon: int,
         successor_weight: float = 1.0,
@@ -232,7 +237,13 @@ def load_rf_successor_checkpoint(
     checkpoint_path: str | Path,
     *,
     map_location: str | torch.device = "cpu",
-) -> tuple[ActionPrefixSuccessorHead, dict[str, Any], dict[str, Any]]:
+) -> tuple[
+    ActionPrefixSuccessorHead
+    | ActionPrefixMomentHead
+    | ManifoldTransformerMomentHead,
+    dict[str, Any],
+    dict[str, Any],
+]:
     """Load the deployment checkpoint written by the joint trainer."""
 
     payload = torch.load(
@@ -248,10 +259,11 @@ def load_rf_successor_checkpoint(
         "rf_ema_balanced_successor_sequence_wm",
         "rf_direct_moment_sequence_wm",
         "rf_e2e_moment_sequence_wm",
+        "rf_manifold_prefix_successor_wm",
     }:
         raise ValueError("The checkpoint is not a supported reward-free successor model.")
     objective_version = payload.get("objective_version")
-    if objective_version not in {1, 2, 3, 4, 5, 6}:
+    if objective_version not in {1, 2, 3, 4, 5, 6, 7}:
         raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
@@ -266,9 +278,26 @@ def load_rf_successor_checkpoint(
         "embed_dim": int(config["embed_dim"]),
         "action_dim": int(config["action_dim"]),
         "history_size": int(config["history_size"]),
-        "hidden_dim": int(config["hidden_dim"]),
     }
-    if method in {
+    if method == "rf_manifold_prefix_successor_wm":
+        if objective_version != 7 or config.get(
+            "architecture"
+        ) != "causal_transformer_manifold_successor":
+            raise ValueError(
+                "The manifold-prefix checkpoint version or architecture differs."
+            )
+        head = ManifoldTransformerMomentHead(
+            **head_kwargs,
+            gamma=float(config["gamma"]),
+            prefix_depth=int(config["prefix_depth"]),
+            prefix_heads=int(config["prefix_heads"]),
+            prefix_mlp_dim=int(config["prefix_mlp_dim"]),
+            predictor_depth=int(config["predictor_depth"]),
+            predictor_mlp_dim=int(config["predictor_mlp_dim"]),
+            fusion_dim=int(config["fusion_dim"]),
+            dropout=float(config["dropout"]),
+        )
+    elif method in {
         "rf_successor_sequence_wm",
         "rf_balanced_successor_sequence_wm",
         "rf_ema_balanced_successor_sequence_wm",
@@ -299,11 +328,17 @@ def load_rf_successor_checkpoint(
             config.get("target_world_ema_decay", -1.0)
         ) < 1.0:
             raise ValueError("The EMA checkpoint has an invalid target decay.")
-        head = ActionPrefixMomentHead(gamma=float(config["gamma"]), **head_kwargs)
+        head = ActionPrefixMomentHead(
+            gamma=float(config["gamma"]),
+            hidden_dim=int(config["hidden_dim"]),
+            **head_kwargs,
+        )
     else:
         if method != "rf_successor_lewm":
             raise ValueError("Objective version 1 requires RF-Successor-LeWM.")
-        head = ActionPrefixSuccessorHead(**head_kwargs)
+        head = ActionPrefixSuccessorHead(
+            hidden_dim=int(config["hidden_dim"]), **head_kwargs
+        )
     head.load_state_dict(payload["successor_state_dict"])
     head.eval()
     head.requires_grad_(False)
@@ -313,7 +348,11 @@ def load_rf_successor_checkpoint(
 def make_rf_successor_policy(
     *,
     world_model: nn.Module,
-    successor: ActionPrefixSuccessorHead | ActionPrefixMomentHead,
+    successor: (
+        ActionPrefixSuccessorHead
+        | ActionPrefixMomentHead
+        | ManifoldTransformerMomentHead
+    ),
     planning: dict[str, Any],
     successor_config: dict[str, Any],
     process: dict[str, Any] | None = None,

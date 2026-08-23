@@ -129,3 +129,32 @@ same direct all-horizon moment loss and inference path, but lets the prediction
 error update both the history and future online-encoder branches. Comparing it
 with the stop-gradient version isolates target-gradient routing without adding
 another loss or changing the planner.
+
+## Manifold prefix variant
+
+`rf_manifold_prefix_successor_wm` removes the independently predicted
+squared-norm coordinate. A causal Transformer reads the current latent and
+each supplied action prefix, then a conditional residual predictor outputs
+the complete future latent sequence:
+
+\[
+\hat z_{t+1:t+K}=F_\theta(z_t,a_{t:t+K-1}),\qquad
+\hat m_h=\phi(\hat z_{t+h}),\qquad
+\hat S_h=\frac{\sum_{j=1}^{h}\gamma^{j-1}\hat m_j}{Z_h}.
+\]
+
+Only `z` is learned. Its norm moment, constant coordinate, every one-step to
+multi-step successor value, and recurrence are deterministic consequences of
+the same prediction. The complete trainable objective is therefore
+
+\[
+\mathcal L=\operatorname{MSE}(\hat z_{t+1:t+K},z_{t+1:t+K})
++\lambda_{\rm SIGReg}\operatorname{SIGReg}(Z).
+\]
+
+This is the cleanest test of whether the small GRU head was the bottleneck:
+data, encoder, optimizer, horizon, SIGReg, and formal CEM protocol stay fixed,
+while the prefix backbone becomes substantially stronger and the successor
+geometry becomes exact. Dense action-prefix latent prediction also overlaps
+the backbone idea studied by [Fast-LeWM](https://arxiv.org/abs/2606.26217), so
+that architecture alone is treated as a control rather than a novelty claim.

@@ -21,6 +21,8 @@ from tdwm.adapters import prepare_cloud_runtime
 from tdwm.methods.rf_successor_lewm import (
     ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
+    ManifoldTransformerMomentHead,
+    manifold_sequence_objective,
     moment_sequence_objective,
     multi_horizon_successor_objective,
     successor_sequence_objective,
@@ -51,6 +53,7 @@ BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
 EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
 DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
 E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
+MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 DIRECT_MOMENT_METHODS = frozenset((DIRECT_MOMENT_METHOD, E2E_MOMENT_METHOD))
 SEQUENCE_METHODS = frozenset(
     (
@@ -59,6 +62,7 @@ SEQUENCE_METHODS = frozenset(
         EMA_BALANCED_SEQUENCE_METHOD,
         DIRECT_MOMENT_METHOD,
         E2E_MOMENT_METHOD,
+        MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -120,7 +124,19 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         if float(objective.get("successor_weight", 0.0)) <= 0.0:
             raise ValueError("The direct successor supervision must remain active.")
     else:
-        if method in DIRECT_MOMENT_METHODS:
+        if method == MANIFOLD_PREFIX_METHOD:
+            expected = {
+                "primitive_prediction": "future_latent_sequence",
+                "single_step": "horizon_one_latent",
+                "multi_step_prediction": "all_horizon_latents",
+                "consistency": "exact_manifold_successor_cumsum",
+                "target_encoder": "online_end_to_end",
+                "goal_conditioning": "none",
+                "policy": "none",
+                "bootstrap": "none",
+            }
+            predictive_weight_key = "latent_sequence_weight"
+        elif method in DIRECT_MOMENT_METHODS:
             expected = {
                 "primitive_prediction": "future_moment_sequence",
                 "single_step": "horizon_one_moment",
@@ -156,7 +172,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             if objective.get(key) != value:
                 raise ValueError(f"joint_objective.{key} must be {value!r}.")
         if float(objective.get(predictive_weight_key, -1.0)) != 1.0:
-            raise ValueError("The S-only method has one unit-weight predictive loss.")
+            raise ValueError("The sequence method has one unit-weight predictive loss.")
 
     successor = protocol.get("successor", {})
     locked = {
@@ -167,12 +183,17 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             EMA_BALANCED_SEQUENCE_METHOD: 4,
             DIRECT_MOMENT_METHOD: 5,
             E2E_MOMENT_METHOD: 6,
+            MANIFOLD_PREFIX_METHOD: 7,
         }[method],
-        "architecture": (
-            "causal_gru_action_prefix"
-            if method == METHOD
-            else "causal_gru_successor_increments"
-        ),
+        "architecture": {
+            METHOD: "causal_gru_action_prefix",
+            S_ONLY_METHOD: "causal_gru_successor_increments",
+            BALANCED_SEQUENCE_METHOD: "causal_gru_successor_increments",
+            EMA_BALANCED_SEQUENCE_METHOD: "causal_gru_successor_increments",
+            DIRECT_MOMENT_METHOD: "causal_gru_successor_increments",
+            E2E_MOMENT_METHOD: "causal_gru_successor_increments",
+            MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+        }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
         "target": {
@@ -182,6 +203,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
             DIRECT_MOMENT_METHOD: "online_stop_gradient_direct_moments",
             E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
+            MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -189,7 +211,11 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         "td_bootstrap": False,
     }
     if method in SEQUENCE_METHODS:
-        locked["latent_recovery"] = "exact_adjacent_successor_difference"
+        locked["latent_recovery"] = (
+            "direct_manifold_latents"
+            if method == MANIFOLD_PREFIX_METHOD
+            else "exact_adjacent_successor_difference"
+        )
     if method in {
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
@@ -202,7 +228,22 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError(f"successor.{key} must be {value!r}.")
     if int(successor.get("max_horizon", 0)) != horizon:
         raise ValueError("successor.max_horizon must equal the rollout horizon.")
-    if int(successor.get("hidden_dim", 0)) <= 0:
+    if method == MANIFOLD_PREFIX_METHOD:
+        architecture_dimensions = (
+            "prefix_depth",
+            "prefix_heads",
+            "prefix_mlp_dim",
+            "predictor_depth",
+            "predictor_mlp_dim",
+            "fusion_dim",
+        )
+        if min(int(successor.get(key, 0)) for key in architecture_dimensions) <= 0:
+            raise ValueError("Manifold-prefix architecture dimensions must be positive.")
+        if int(protocol["model"]["embed_dim"]) % int(successor["prefix_heads"]):
+            raise ValueError("model.embed_dim must be divisible by prefix_heads.")
+        if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
+            raise ValueError("successor.dropout must lie in [0, 1).")
+    elif int(successor.get("hidden_dim", 0)) <= 0:
         raise ValueError("successor.hidden_dim must be positive.")
     gamma = float(successor.get("gamma", -1.0))
     if not 0.0 <= gamma <= 1.0:
@@ -696,13 +737,28 @@ def _build_successor_sequence_training_module(
                 knots=sigreg["knots"], num_proj=sigreg["num_projections"]
             )
             successor = protocol["successor"]
-            self.successor = ActionPrefixMomentHead(
-                embed_dim=int(protocol["model"]["embed_dim"]),
-                action_dim=action_block_dim,
-                history_size=int(protocol["sequence"]["history_frames"]),
-                hidden_dim=int(successor["hidden_dim"]),
-                gamma=float(successor["gamma"]),
-            )
+            head_dimensions = {
+                "embed_dim": int(protocol["model"]["embed_dim"]),
+                "action_dim": action_block_dim,
+                "history_size": int(protocol["sequence"]["history_frames"]),
+                "gamma": float(successor["gamma"]),
+            }
+            if protocol["method"] == MANIFOLD_PREFIX_METHOD:
+                self.successor = ManifoldTransformerMomentHead(
+                    **head_dimensions,
+                    prefix_depth=int(successor["prefix_depth"]),
+                    prefix_heads=int(successor["prefix_heads"]),
+                    prefix_mlp_dim=int(successor["prefix_mlp_dim"]),
+                    predictor_depth=int(successor["predictor_depth"]),
+                    predictor_mlp_dim=int(successor["predictor_mlp_dim"]),
+                    fusion_dim=int(successor["fusion_dim"]),
+                    dropout=float(successor["dropout"]),
+                )
+            else:
+                self.successor = ActionPrefixMomentHead(
+                    **head_dimensions,
+                    hidden_dim=int(successor["hidden_dim"]),
+                )
             self.history_size = int(protocol["sequence"]["history_frames"])
             self.horizon = int(protocol["sequence"]["rollout_horizon"])
             self.gamma = float(successor["gamma"])
@@ -755,7 +811,17 @@ def _build_successor_sequence_training_module(
             vector_reduction = protocol["successor"].get(
                 "feature_group_reduction", "coordinate_mean"
             )
-            if protocol["method"] in DIRECT_MOMENT_METHODS:
+            if protocol["method"] == MANIFOLD_PREFIX_METHOD:
+                output = manifold_sequence_objective(
+                    self.successor,
+                    windows.history,
+                    windows.action_prefix,
+                    windows.target_future,
+                    gamma=self.gamma,
+                )
+                predictive_loss = output.latent_loss
+                predictive_metric = "latent_sequence_loss"
+            elif protocol["method"] in DIRECT_MOMENT_METHODS:
                 output = moment_sequence_objective(
                     self.successor,
                     windows.history,
@@ -817,6 +883,13 @@ def _build_successor_sequence_training_module(
                 )
                 metrics[f"{stage}/moment_mse_hK"] = (
                     output.moment_mse_by_horizon[-1].detach()
+                )
+            elif protocol["method"] == MANIFOLD_PREFIX_METHOD:
+                metrics[f"{stage}/latent_mse_h1"] = (
+                    output.latent_mse_by_horizon[0].detach()
+                )
+                metrics[f"{stage}/latent_mse_hK"] = (
+                    output.latent_mse_by_horizon[-1].detach()
                 )
             if episode_ids is not None:
                 metrics[f"{stage}/unique_episodes_per_batch"] = loss.new_tensor(
@@ -941,7 +1014,6 @@ def _successor_config(
         "embed_dim": protocol["model"]["embed_dim"],
         "action_dim": action_block_dim,
         "history_size": protocol["sequence"]["history_frames"],
-        "hidden_dim": successor["hidden_dim"],
         "max_horizon": successor["max_horizon"],
         "gamma": successor["gamma"],
         "feature_basis": successor["feature_basis"],
@@ -957,6 +1029,19 @@ def _successor_config(
         "base_export_run_name": base_export_run_name,
         "base_checkpoint_sha256": base_checkpoint_sha256,
     }
+    if protocol["method"] == MANIFOLD_PREFIX_METHOD:
+        for key in (
+            "prefix_depth",
+            "prefix_heads",
+            "prefix_mlp_dim",
+            "predictor_depth",
+            "predictor_mlp_dim",
+            "fusion_dim",
+            "dropout",
+        ):
+            config[key] = successor[key]
+    else:
+        config["hidden_dim"] = successor["hidden_dim"]
     if "target_world_ema_decay" in successor:
         config["target_world_ema_decay"] = successor["target_world_ema_decay"]
     if "latent_recovery" in successor:
@@ -1396,6 +1481,7 @@ __all__ = [
     "DIRECT_MOMENT_METHODS",
     "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
+    "MANIFOLD_PREFIX_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "MultiHorizonWindows",

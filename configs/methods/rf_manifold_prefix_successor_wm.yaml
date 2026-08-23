@@ -1,0 +1,52 @@
+schema_version: 1
+id: rf_manifold_prefix_successor_wm
+display_name: Reward-Free Manifold Prefix Successor WM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  encoder_container: swm.wm.LeWM
+  successor_head: tdwm.methods.rf_successor_lewm.ManifoldTransformerMomentHead
+  adapter: tdwm.adapters.rf_successor_lewm.RewardFreeSuccessorLeWM
+
+input:
+  history: current_latent_observation
+  action: externally_supplied_candidate_prefix
+  goal_during_training: false
+  reward_during_training: false
+
+model:
+  primitive_prediction:
+    type: causal_action_prefix_future_latents
+    output: every_future_latent_from_1_to_K
+  successor:
+    construction: exact_lift_then_normalized_discounted_cumsum
+    output: every_finite_horizon_successor_from_1_to_K
+    feature_basis: augmented_latent_squared_distance
+  action_policy:
+    present: false
+
+target:
+  type: online_end_to_end_latents
+  horizons: all_prefixes_1_to_K
+  td_bootstrap: false
+
+loss:
+  - all_horizon_latent_sequence_mse
+  - sigreg
+
+inference:
+  goal_query: linear_projection_of_terminal_successor
+  action_selection: stable_worldmodel_cem_mpc
+  autoregressive_latent_rollout: false
+  learned_policy: false
+
+scope:
+  supported_zero_shot_query: squared_distance_to_any_encoded_goal
+  arbitrary_reward_zero_shot_rl: false
+
+provenance:
+  architectural_control: configs/methods/rf_e2e_moment_sequence_wm.yaml
+  note: One learned latent-sequence objective; moments and successor values are exact deterministic geometry.
