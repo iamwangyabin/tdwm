@@ -46,7 +46,9 @@ from tdwm.training.lewm import _git_revision
 
 METHOD = "rf_successor_lewm"
 S_ONLY_METHOD = "rf_successor_sequence_wm"
-SUPPORTED_METHODS = frozenset((METHOD, S_ONLY_METHOD))
+BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
+SEQUENCE_METHODS = frozenset((S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD))
+SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
 
 
 def load_rf_successor_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -123,7 +125,11 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
 
     successor = protocol.get("successor", {})
     locked = {
-        "objective_version": 1 if method == METHOD else 2,
+        "objective_version": {
+            METHOD: 1,
+            S_ONLY_METHOD: 2,
+            BALANCED_SEQUENCE_METHOD: 3,
+        }[method],
         "architecture": (
             "causal_gru_action_prefix"
             if method == METHOD
@@ -141,8 +147,10 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         "continuation_policy": "none",
         "td_bootstrap": False,
     }
-    if method == S_ONLY_METHOD:
+    if method in SEQUENCE_METHODS:
         locked["latent_recovery"] = "exact_adjacent_successor_difference"
+    if method == BALANCED_SEQUENCE_METHOD:
+        locked["feature_group_reduction"] = "group_sum"
     for key, value in locked.items():
         if successor.get(key) != value:
             raise ValueError(f"successor.{key} must be {value!r}.")
@@ -153,7 +161,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     gamma = float(successor.get("gamma", -1.0))
     if not 0.0 <= gamma <= 1.0:
         raise ValueError("successor.gamma must lie in [0, 1].")
-    if method == S_ONLY_METHOD and gamma == 0.0:
+    if method in SEQUENCE_METHODS and gamma == 0.0:
         raise ValueError("The S-only method requires gamma > 0 for latent recovery.")
     if method == METHOD:
         if not 0.0 <= float(successor.get("target_world_ema_decay", -1.0)) < 1.0:
@@ -166,7 +174,9 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("Successor planning weights cannot be negative.")
     if planning_weight + terminal_weight <= 0.0:
         raise ValueError("At least one planning cost must be active.")
-    if method == S_ONLY_METHOD and (planning_weight != 1.0 or terminal_weight != 0.0):
+    if method in SEQUENCE_METHODS and (
+        planning_weight != 1.0 or terminal_weight != 0.0
+    ):
         raise ValueError("The S-only primary planner must use only the successor score.")
 
     split = protocol.get("split", {})
@@ -676,6 +686,9 @@ def _build_successor_sequence_training_module(
                 windows.action_prefix,
                 windows.target_future,
                 gamma=self.gamma,
+                vector_reduction=protocol["successor"].get(
+                    "feature_group_reduction", "coordinate_mean"
+                ),
             )
 
             local_count = embeddings.shape[1] - self.history_size
@@ -789,7 +802,7 @@ def _build_training_module(
 ):
     builder = (
         _build_successor_sequence_training_module
-        if protocol["method"] == S_ONLY_METHOD
+        if protocol["method"] in SEQUENCE_METHODS
         else _build_joint_training_module
     )
     return builder(
@@ -843,6 +856,10 @@ def _successor_config(
         config["target_world_ema_decay"] = successor["target_world_ema_decay"]
     if "latent_recovery" in successor:
         config["latent_recovery"] = successor["latent_recovery"]
+    if "feature_group_reduction" in successor:
+        config["feature_group_reduction"] = successor[
+            "feature_group_reduction"
+        ]
     return config
 
 
@@ -1269,6 +1286,8 @@ def train_rf_successor_lewm(
 
 __all__ = [
     "METHOD",
+    "BALANCED_SEQUENCE_METHOD",
+    "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "MultiHorizonWindows",
     "build_multi_horizon_windows",

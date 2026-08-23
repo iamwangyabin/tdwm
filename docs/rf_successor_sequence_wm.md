@@ -81,3 +81,22 @@ python scripts/evaluate_rf_successor_sequence_wm.py --smoke \
 No performance claim is made until the S-only model is compared against LeWM,
 Fast-LeWM-style dense prefix prediction, and the existing joint successor
 variant under the same data, CEM budget, and seeds.
+
+## Group-balanced controlled variant
+
+The lifted vector is `z / sqrt(d)`. A coordinate-wise mean squared error on
+that vector therefore divides latent MSE by `d` a second time and makes the
+192-dimensional direction much weaker than the scalar squared-norm feature.
+The controlled `rf_balanced_successor_sequence_wm` variant changes only this
+reduction:
+
+\[
+\mathcal L_{\mathrm{vec}}
+=\mathbb E\left[\sum_{i=1}^{d}
+(\hat S_i-S_i^\star)^2\right].
+\]
+
+The sum exactly equals latent-coordinate MSE under the `sqrt(d)` scaling. The
+successor construction, online target, SIGReg, architecture, optimizer, data,
+and planner remain unchanged, so a one-epoch comparison isolates this error
+scaling before introducing less controlled architectural changes.

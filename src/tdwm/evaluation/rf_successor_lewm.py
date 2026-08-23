@@ -31,7 +31,9 @@ from tdwm.evaluation.mc_gt_lewm import _load_action_processor
 
 METHOD = "rf_successor_lewm"
 S_ONLY_METHOD = "rf_successor_sequence_wm"
-SUPPORTED_METHODS = frozenset((METHOD, S_ONLY_METHOD))
+BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
+SEQUENCE_METHODS = frozenset((S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD))
+SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
 
 
 def load_rf_successor_evaluation_protocol(path: str | Path) -> dict[str, Any]:
@@ -52,7 +54,11 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
 
     successor = protocol.get("successor", {})
     expected = {
-        "objective_version": 1 if method == METHOD else 2,
+        "objective_version": {
+            METHOD: 1,
+            S_ONLY_METHOD: 2,
+            BALANCED_SEQUENCE_METHOD: 3,
+        }[method],
         "architecture": (
             "causal_gru_action_prefix"
             if method == METHOD
@@ -70,8 +76,10 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         "continuation_policy": "none",
         "td_bootstrap": False,
     }
-    if method == S_ONLY_METHOD:
+    if method in SEQUENCE_METHODS:
         expected["latent_recovery"] = "exact_adjacent_successor_difference"
+    if method == BALANCED_SEQUENCE_METHOD:
+        expected["feature_group_reduction"] = "group_sum"
     for key, value in expected.items():
         if successor.get(key) != value:
             raise ValueError(f"successor.{key} must be {value!r}.")
@@ -86,7 +94,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         float(successor.get("terminal_weight", -1.0)),
     ) < 0.0:
         raise ValueError("Planning cost weights cannot be negative.")
-    if method == S_ONLY_METHOD and (
+    if method in SEQUENCE_METHODS and (
         float(successor.get("planning_weight", -1.0)) != 1.0
         or float(successor.get("terminal_weight", -1.0)) != 0.0
     ):
@@ -380,6 +388,8 @@ def evaluate_rf_successor_lewm(
 
 
 __all__ = [
+    "BALANCED_SEQUENCE_METHOD",
+    "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "evaluate_rf_successor_lewm",
     "load_rf_successor_evaluation_protocol",

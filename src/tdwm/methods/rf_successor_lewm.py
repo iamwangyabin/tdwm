@@ -139,12 +139,29 @@ def successor_recurrence_residual(
 def balanced_successor_mse(
     prediction: torch.Tensor,
     target: torch.Tensor,
+    *,
+    vector_reduction: str = "coordinate_mean",
 ) -> torch.Tensor:
-    """Balance vector, squared-norm, and constant feature errors."""
+    """Combine vector, squared-norm, and constant feature errors.
+
+    ``coordinate_mean`` preserves the objective used by the first two method
+    versions. ``group_sum`` treats the complete scaled latent vector as one
+    feature group. Because the vector is scaled by ``sqrt(d)``, summing that
+    group's coordinate errors recovers latent MSE instead of dividing it by
+    ``d`` a second time.
+    """
 
     if prediction.shape != target.shape or prediction.shape[-1] < 3:
         raise ValueError("prediction and target must be matching lifted features.")
-    vector = (prediction[..., :-2] - target[..., :-2]).square().mean()
+    vector_error = (prediction[..., :-2] - target[..., :-2]).square()
+    if vector_reduction == "coordinate_mean":
+        vector = vector_error.mean()
+    elif vector_reduction == "group_sum":
+        vector = vector_error.sum(dim=-1).mean()
+    else:
+        raise ValueError(
+            "vector_reduction must be 'coordinate_mean' or 'group_sum'."
+        )
     squared_norm = (prediction[..., -2] - target[..., -2]).square().mean()
     constant = (prediction[..., -1] - target[..., -1]).square().mean()
     return (vector + squared_norm + constant) / 3.0
@@ -324,6 +341,7 @@ def successor_sequence_objective(
     target_future: torch.Tensor,
     *,
     gamma: float,
+    vector_reduction: str = "coordinate_mean",
 ) -> SuccessorSequenceOutput:
     """Train one successor sequence without latent or recurrence losses."""
 
@@ -345,7 +363,11 @@ def successor_sequence_objective(
         target=target,
         moments=moments,
         recovered_future=recovered_future,
-        successor_loss=balanced_successor_mse(prediction, target),
+        successor_loss=balanced_successor_mse(
+            prediction,
+            target,
+            vector_reduction=vector_reduction,
+        ),
         successor_mse_by_horizon=_mse_by_horizon(prediction - target),
         recovered_latent_mse_by_horizon=_mse_by_horizon(
             recovered_future - target_future
