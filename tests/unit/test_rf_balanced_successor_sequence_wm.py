@@ -4,6 +4,7 @@ import torch
 
 from tdwm.adapters.rf_successor_lewm import load_rf_successor_checkpoint
 from tdwm.evaluation.rf_successor_lewm import (
+    configure_rf_successor_evaluation_mode,
     load_rf_successor_evaluation_protocol,
 )
 from tdwm.methods.rf_successor_lewm import (
@@ -120,3 +121,37 @@ def test_group_balanced_protocols_lock_the_single_changed_factor():
     assert training["successor"]["feature_group_reduction"] == "group_sum"
     assert evaluation["successor"]["feature_group_reduction"] == "group_sum"
     assert training["joint_objective"]["successor_sequence_weight"] == 1.0
+
+
+def test_pilot_mode_uses_a_fixed_short_budget_without_mutating_formal_protocol():
+    protocol = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_balanced_successor_sequence_wm_cube_checkpoint_o50.yaml"
+    )
+
+    pilot = configure_rf_successor_evaluation_mode(
+        protocol,
+        smoke=False,
+        pilot=True,
+    )
+
+    assert pilot["evaluation"]["episodes"] == 10
+    assert pilot["planning"]["candidates"] == 128
+    assert pilot["planning"]["iterations"] == 10
+    assert pilot["planning"]["elites"] == 16
+    assert protocol["evaluation"]["episodes"] == 50
+    assert protocol["planning"]["candidates"] == 300
+
+
+def test_smoke_and_pilot_modes_are_mutually_exclusive():
+    protocol = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_balanced_successor_sequence_wm_cube_checkpoint_o50.yaml"
+    )
+
+    try:
+        configure_rf_successor_evaluation_mode(protocol, smoke=True, pilot=True)
+    except ValueError as error:
+        assert "mutually exclusive" in str(error)
+    else:
+        raise AssertionError("Expected mutually exclusive evaluation modes to fail.")

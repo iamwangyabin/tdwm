@@ -6,6 +6,7 @@ import importlib.metadata
 import os
 import platform
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -179,6 +180,38 @@ def _validate_checkpoint_pair(
         raise ValueError("The successor checkpoint does not match the LeWM weights.")
 
 
+def configure_rf_successor_evaluation_mode(
+    protocol: dict[str, Any],
+    *,
+    smoke: bool,
+    pilot: bool,
+) -> dict[str, Any]:
+    """Apply one fixed screening budget without weakening the formal protocol."""
+
+    if smoke and pilot:
+        raise ValueError("Smoke and pilot evaluation modes are mutually exclusive.")
+    configured = deepcopy(protocol)
+    if smoke:
+        configured["id"] = f"{configured['id']}_smoke"
+        configured["evaluation"]["episodes"] = 1
+        configured["planning"].update(
+            {"candidates": 8, "iterations": 1, "elites": 2, "episode_budget": 25}
+        )
+    elif pilot:
+        configured["id"] = f"{configured['id']}_pilot"
+        configured["evaluation"]["episodes"] = 10
+        configured["planning"].update(
+            {
+                "candidates": 128,
+                "iterations": 10,
+                "elites": 16,
+                "episode_budget": 100,
+            }
+        )
+    validate_rf_successor_evaluation_protocol(configured)
+    return configured
+
+
 def evaluate_rf_successor_lewm(
     *,
     protocol_path: str | Path,
@@ -188,15 +221,13 @@ def evaluate_rf_successor_lewm(
     successor_checkpoint_path: str | Path,
     video: bool = False,
     smoke: bool = False,
+    pilot: bool = False,
 ) -> dict[str, Any]:
-    protocol = load_rf_successor_evaluation_protocol(protocol_path)
-    if smoke:
-        protocol["id"] = f"{protocol['id']}_smoke"
-        protocol["evaluation"]["episodes"] = 1
-        protocol["planning"].update(
-            {"candidates": 8, "iterations": 1, "elites": 2, "episode_budget": 25}
-        )
-        validate_rf_successor_evaluation_protocol(protocol)
+    protocol = configure_rf_successor_evaluation_mode(
+        load_rf_successor_evaluation_protocol(protocol_path),
+        smoke=smoke,
+        pilot=pilot,
+    )
 
     dataset_path = Path(dataset_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -381,6 +412,7 @@ def evaluate_rf_successor_lewm(
         "successor_parameter_count": successor_parameter_count,
         "method": protocol["method"],
         "smoke": smoke,
+        "pilot": pilot,
         "protocol_manifest": str(output_dir / "protocol_manifest.json"),
     }
     _write_json(output_dir / "results.json", result)
@@ -391,6 +423,7 @@ __all__ = [
     "BALANCED_SEQUENCE_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
+    "configure_rf_successor_evaluation_mode",
     "evaluate_rf_successor_lewm",
     "load_rf_successor_evaluation_protocol",
     "validate_rf_successor_evaluation_protocol",

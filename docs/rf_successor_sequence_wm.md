@@ -100,3 +100,8 @@ The sum exactly equals latent-coordinate MSE under the `sqrt(d)` scaling. The
 successor construction, online target, SIGReg, architecture, optimizer, data,
 and planner remain unchanged, so a one-epoch comparison isolates this error
 scaling before introducing less controlled architectural changes.
+
+For rapid screening, evaluation accepts `--pilot`. It locks a shared budget of
+10 episodes, 128 CEM candidates, 10 iterations, 16 elites, and 100 environment
+steps. This mode is only a successive-halving gate; any selected checkpoint is
+rerun with the unchanged 50-episode formal protocol before reporting a result.

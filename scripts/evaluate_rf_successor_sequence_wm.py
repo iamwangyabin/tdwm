@@ -29,7 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--successor-checkpoint-path", required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--video", action="store_true")
-    parser.add_argument("--smoke", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--smoke", action="store_true")
+    mode.add_argument("--pilot", action="store_true")
     return parser.parse_args()
 
 
@@ -51,6 +53,7 @@ def main() -> None:
         successor_checkpoint_path=args.successor_checkpoint_path,
         video=args.video,
         smoke=args.smoke,
+        pilot=args.pilot,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
