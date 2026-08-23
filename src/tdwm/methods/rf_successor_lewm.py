@@ -45,12 +45,61 @@ def finite_horizon_successor_targets(
 
     if future_latents.ndim < 2 or future_latents.shape[-2] <= 0:
         raise ValueError("future_latents must contain a non-empty time axis.")
-    powers, mass = discounted_prefix_mass(
-        future_latents.shape[-2], gamma=gamma, reference=future_latents
+    return finite_horizon_successor_from_moments(
+        successor_feature_basis(future_latents), gamma=gamma
     )
-    view_shape = (1,) * (future_latents.ndim - 2) + (-1, 1)
-    weighted = successor_feature_basis(future_latents) * powers.view(view_shape)
+
+
+def finite_horizon_successor_from_moments(
+    moments: torch.Tensor,
+    *,
+    gamma: float,
+) -> torch.Tensor:
+    """Convert per-horizon future moments into normalized prefix successors."""
+
+    if moments.ndim < 2 or moments.shape[-2] <= 0 or moments.shape[-1] < 3:
+        raise ValueError("moments must contain non-empty time and feature axes.")
+    powers, mass = discounted_prefix_mass(
+        moments.shape[-2], gamma=gamma, reference=moments
+    )
+    view_shape = (1,) * (moments.ndim - 2) + (-1, 1)
+    weighted = moments * powers.view(view_shape)
     return weighted.cumsum(dim=-2) / mass.view(view_shape)
+
+
+def successor_moments_from_sequence(
+    successor: torch.Tensor,
+    *,
+    gamma: float,
+) -> torch.Tensor:
+    """Invert an all-horizon successor sequence into future moments."""
+
+    if successor.ndim < 2 or successor.shape[-2] <= 0 or successor.shape[-1] < 3:
+        raise ValueError("successor must contain non-empty time and feature axes.")
+    powers, mass = discounted_prefix_mass(
+        successor.shape[-2], gamma=gamma, reference=successor
+    )
+    if torch.any(powers == 0):
+        raise ValueError("Recovering future moments requires gamma > 0.")
+    view_shape = (1,) * (successor.ndim - 2) + (-1, 1)
+    weighted = successor * mass.view(view_shape)
+    previous = torch.cat(
+        (torch.zeros_like(weighted[..., :1, :]), weighted[..., :-1, :]),
+        dim=-2,
+    )
+    return (weighted - previous) / powers.view(view_shape)
+
+
+def latent_sequence_from_successor(
+    successor: torch.Tensor,
+    *,
+    gamma: float,
+) -> torch.Tensor:
+    """Recover the latent coordinates represented by successor increments."""
+
+    moments = successor_moments_from_sequence(successor, gamma=gamma)
+    latent_dim = moments.shape[-1] - 2
+    return moments[..., :latent_dim] * math.sqrt(latent_dim)
 
 
 def successor_recurrence_residual(
@@ -175,6 +224,31 @@ class ActionPrefixSuccessorHead(nn.Module):
         return successor.reshape(*leading, action_prefix.shape[-2], self.output_dim)
 
 
+class ActionPrefixMomentHead(ActionPrefixSuccessorHead):
+    """Predict future moments and construct successors by exact accumulation."""
+
+    def __init__(self, *, gamma: float, **kwargs) -> None:
+        super().__init__(**kwargs)
+        if not 0.0 < gamma <= 1.0:
+            raise ValueError("ActionPrefixMomentHead requires gamma in (0, 1].")
+        self.gamma = float(gamma)
+
+    def predict_moments(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+    ) -> torch.Tensor:
+        return super().forward(latent_history, action_prefix)
+
+    def forward(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+    ) -> torch.Tensor:
+        moments = self.predict_moments(latent_history, action_prefix)
+        return finite_horizon_successor_from_moments(moments, gamma=self.gamma)
+
+
 @dataclass(frozen=True)
 class MultiHorizonSuccessorOutput:
     """Joint losses for the two descriptions of one future trajectory."""
@@ -187,6 +261,19 @@ class MultiHorizonSuccessorOutput:
     latent_mse_by_horizon: torch.Tensor
     successor_mse_by_horizon: torch.Tensor
     recurrence_mse_by_horizon: torch.Tensor
+
+
+@dataclass(frozen=True)
+class SuccessorSequenceOutput:
+    """The single predictive objective used by the S-only method."""
+
+    prediction: torch.Tensor
+    target: torch.Tensor
+    moments: torch.Tensor
+    recovered_future: torch.Tensor
+    successor_loss: torch.Tensor
+    successor_mse_by_horizon: torch.Tensor
+    recovered_latent_mse_by_horizon: torch.Tensor
 
 
 def _mse_by_horizon(error: torch.Tensor) -> torch.Tensor:
@@ -230,12 +317,54 @@ def multi_horizon_successor_objective(
     )
 
 
+def successor_sequence_objective(
+    head: ActionPrefixMomentHead,
+    latent_history: torch.Tensor,
+    action_prefix: torch.Tensor,
+    target_future: torch.Tensor,
+    *,
+    gamma: float,
+) -> SuccessorSequenceOutput:
+    """Train one successor sequence without latent or recurrence losses."""
+
+    if target_future.shape[:-2] != latent_history.shape[:-2]:
+        raise ValueError("future and history leading shapes must match.")
+    if target_future.shape[-2] != action_prefix.shape[-2]:
+        raise ValueError("future and action-prefix horizons must match.")
+    if target_future.shape[-1] != head.embed_dim:
+        raise ValueError("future latents and the successor head must share a dimension.")
+    if not math.isclose(float(gamma), head.gamma):
+        raise ValueError("The objective gamma differs from the head gamma.")
+
+    moments = head.predict_moments(latent_history, action_prefix)
+    prediction = finite_horizon_successor_from_moments(moments, gamma=gamma)
+    target = finite_horizon_successor_targets(target_future, gamma=gamma)
+    recovered_future = latent_sequence_from_successor(prediction, gamma=gamma)
+    return SuccessorSequenceOutput(
+        prediction=prediction,
+        target=target,
+        moments=moments,
+        recovered_future=recovered_future,
+        successor_loss=balanced_successor_mse(prediction, target),
+        successor_mse_by_horizon=_mse_by_horizon(prediction - target),
+        recovered_latent_mse_by_horizon=_mse_by_horizon(
+            recovered_future - target_future
+        ),
+    )
+
+
 __all__ = [
+    "ActionPrefixMomentHead",
     "ActionPrefixSuccessorHead",
     "MultiHorizonSuccessorOutput",
+    "SuccessorSequenceOutput",
     "balanced_successor_mse",
     "discounted_prefix_mass",
+    "finite_horizon_successor_from_moments",
     "finite_horizon_successor_targets",
+    "latent_sequence_from_successor",
     "multi_horizon_successor_objective",
+    "successor_moments_from_sequence",
     "successor_recurrence_residual",
+    "successor_sequence_objective",
 ]

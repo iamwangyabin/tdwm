@@ -30,6 +30,8 @@ from tdwm.evaluation.lewm_checkpoint import (
 from tdwm.evaluation.mc_gt_lewm import _load_action_processor
 
 METHOD = "rf_successor_lewm"
+S_ONLY_METHOD = "rf_successor_sequence_wm"
+SUPPORTED_METHODS = frozenset((METHOD, S_ONLY_METHOD))
 
 
 def load_rf_successor_evaluation_protocol(path: str | Path) -> dict[str, Any]:
@@ -40,8 +42,9 @@ def load_rf_successor_evaluation_protocol(path: str | Path) -> dict[str, Any]:
 
 
 def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
-    if protocol.get("schema_version") != 1 or protocol.get("method") != METHOD:
-        raise ValueError("RF-Successor-LeWM evaluation requires schema 1.")
+    method = protocol.get("method")
+    if protocol.get("schema_version") != 1 or method not in SUPPORTED_METHODS:
+        raise ValueError("Reward-free successor evaluation requires schema 1.")
     if protocol.get("environment") != "cube" or protocol.get("stage") != "planner_evaluation":
         raise ValueError("RF-Successor-LeWM evaluation is locked to Cube planning.")
     if protocol.get("runtime", {}).get("stable_worldmodel_version") != "0.1.1":
@@ -49,16 +52,26 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
 
     successor = protocol.get("successor", {})
     expected = {
-        "objective_version": 1,
-        "architecture": "causal_gru_action_prefix",
+        "objective_version": 1 if method == METHOD else 2,
+        "architecture": (
+            "causal_gru_action_prefix"
+            if method == METHOD
+            else "causal_gru_successor_increments"
+        ),
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
-        "target": "direct_monte_carlo",
+        "target": (
+            "direct_monte_carlo"
+            if method == METHOD
+            else "online_direct_monte_carlo"
+        ),
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
         "continuation_policy": "none",
         "td_bootstrap": False,
     }
+    if method == S_ONLY_METHOD:
+        expected["latent_recovery"] = "exact_adjacent_successor_difference"
     for key, value in expected.items():
         if successor.get(key) != value:
             raise ValueError(f"successor.{key} must be {value!r}.")
@@ -73,6 +86,11 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         float(successor.get("terminal_weight", -1.0)),
     ) < 0.0:
         raise ValueError("Planning cost weights cannot be negative.")
+    if method == S_ONLY_METHOD and (
+        float(successor.get("planning_weight", -1.0)) != 1.0
+        or float(successor.get("terminal_weight", -1.0)) != 0.0
+    ):
+        raise ValueError("The S-only planner must use only the successor score.")
 
     planning = protocol.get("planning", {})
     missing = REQUIRED_PLANNING_KEYS - planning.keys()
@@ -104,7 +122,7 @@ def _resolve_successor_checkpoint(path: str | Path) -> Path:
         if len(files) == 1:
             return files[0]
     raise FileNotFoundError(
-        "An RF-Successor-LeWM deployment checkpoint must be a .pt file or a "
+        "A reward-free successor deployment checkpoint must be a .pt file or a "
         "directory containing exactly one .pt file."
     )
 
@@ -128,6 +146,8 @@ def _validate_successor_config(
         "continuation_policy": successor["continuation_policy"],
         "td_bootstrap": successor["td_bootstrap"],
     }
+    if "latent_recovery" in successor:
+        expected["latent_recovery"] = successor["latent_recovery"]
     for key, value in expected.items():
         if config.get(key) != value:
             raise ValueError(f"Successor checkpoint {key} differs from protocol.")
@@ -194,6 +214,8 @@ def evaluate_rf_successor_lewm(
     head, head_config, payload = load_rf_successor_checkpoint(
         successor_file, map_location=device
     )
+    if payload.get("method") != protocol["method"]:
+        raise ValueError("The deployment checkpoint method differs from protocol.")
     _validate_successor_config(head_config, protocol)
     _validate_checkpoint_pair(
         base_name=base_name,
@@ -349,7 +371,7 @@ def evaluate_rf_successor_lewm(
         "elapsed_seconds": time.time() - started,
         "world_model_parameter_count": parameter_count,
         "successor_parameter_count": successor_parameter_count,
-        "method": METHOD,
+        "method": protocol["method"],
         "smoke": smoke,
         "protocol_manifest": str(output_dir / "protocol_manifest.json"),
     }
@@ -358,6 +380,7 @@ def evaluate_rf_successor_lewm(
 
 
 __all__ = [
+    "S_ONLY_METHOD",
     "evaluate_rf_successor_lewm",
     "load_rf_successor_evaluation_protocol",
     "validate_rf_successor_evaluation_protocol",

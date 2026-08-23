@@ -19,8 +19,10 @@ import yaml
 
 from tdwm.adapters import prepare_cloud_runtime
 from tdwm.methods.rf_successor_lewm import (
+    ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
     multi_horizon_successor_objective,
+    successor_sequence_objective,
 )
 from tdwm.training.block_sampler import BlockShuffleBatchSampler
 from tdwm.training.cube_data import validate_cube_training_dataset
@@ -43,6 +45,8 @@ from tdwm.training.lance_batch import (
 from tdwm.training.lewm import _git_revision
 
 METHOD = "rf_successor_lewm"
+S_ONLY_METHOD = "rf_successor_sequence_wm"
+SUPPORTED_METHODS = frozenset((METHOD, S_ONLY_METHOD))
 
 
 def load_rf_successor_training_protocol(path: str | Path) -> dict[str, Any]:
@@ -53,8 +57,9 @@ def load_rf_successor_training_protocol(path: str | Path) -> dict[str, Any]:
 
 
 def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
-    if protocol.get("schema_version") != 1 or protocol.get("method") != METHOD:
-        raise ValueError("This trainer only accepts RF-Successor-LeWM schema 1.")
+    method = protocol.get("method")
+    if protocol.get("schema_version") != 1 or method not in SUPPORTED_METHODS:
+        raise ValueError("This trainer only accepts supported reward-free schema 1 methods.")
     if protocol.get("environment") != "cube" or protocol.get("stage") != "full_training":
         raise ValueError("RF-Successor-LeWM training is locked to full Cube training.")
     if protocol.get("initialization") != "random_from_scratch":
@@ -69,48 +74,75 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     if min(history, horizon) <= 0 or num_steps < history + horizon:
         raise ValueError("The clip must cover history plus the rollout horizon.")
     if sequence.get("prediction_frames") != 1:
-        raise ValueError("The unchanged local LeWM objective predicts one frame.")
+        raise ValueError("The public LeWM model configuration predicts one frame.")
     if int(sequence.get("frame_skip", 0)) <= 0:
         raise ValueError("sequence.frame_skip must be positive.")
 
     objective = protocol.get("joint_objective", {})
-    expected = {
-        "local_prediction": "original_lewm_one_step_mse",
-        "multi_step_prediction": "open_loop_latent_mse_all_horizons",
-        "successor": "direct_mc_all_prefix_horizons",
-        "consistency": "successor_increment_equals_rollout_feature",
-        "target_encoder": "ema_world_model",
-        "goal_conditioning": "none",
-        "policy": "none",
-        "bootstrap": "none",
-    }
-    for key, value in expected.items():
-        if objective.get(key) != value:
-            raise ValueError(f"joint_objective.{key} must be {value!r}.")
-    if objective.get("local_prediction_weight") != 1.0:
-        raise ValueError("The original local LeWM prediction weight remains one.")
-    for key in (
-        "multi_step_prediction_weight",
-        "successor_weight",
-        "recurrence_weight",
-    ):
-        if float(objective.get(key, -1.0)) < 0.0:
-            raise ValueError(f"joint_objective.{key} cannot be negative.")
-    if float(objective.get("successor_weight", 0.0)) <= 0.0:
-        raise ValueError("The direct successor supervision must remain active.")
+    if method == METHOD:
+        expected = {
+            "local_prediction": "original_lewm_one_step_mse",
+            "multi_step_prediction": "open_loop_latent_mse_all_horizons",
+            "successor": "direct_mc_all_prefix_horizons",
+            "consistency": "successor_increment_equals_rollout_feature",
+            "target_encoder": "ema_world_model",
+            "goal_conditioning": "none",
+            "policy": "none",
+            "bootstrap": "none",
+        }
+        for key, value in expected.items():
+            if objective.get(key) != value:
+                raise ValueError(f"joint_objective.{key} must be {value!r}.")
+        if objective.get("local_prediction_weight") != 1.0:
+            raise ValueError("The original local LeWM prediction weight remains one.")
+        for key in (
+            "multi_step_prediction_weight",
+            "successor_weight",
+            "recurrence_weight",
+        ):
+            if float(objective.get(key, -1.0)) < 0.0:
+                raise ValueError(f"joint_objective.{key} cannot be negative.")
+        if float(objective.get("successor_weight", 0.0)) <= 0.0:
+            raise ValueError("The direct successor supervision must remain active.")
+    else:
+        expected = {
+            "primitive_prediction": "successor_sequence",
+            "single_step": "horizon_one_successor",
+            "multi_step_prediction": "recovered_from_successor_increments",
+            "consistency": "architectural_discounted_cumsum",
+            "target_encoder": "online_end_to_end",
+            "goal_conditioning": "none",
+            "policy": "none",
+            "bootstrap": "none",
+        }
+        for key, value in expected.items():
+            if objective.get(key) != value:
+                raise ValueError(f"joint_objective.{key} must be {value!r}.")
+        if float(objective.get("successor_sequence_weight", -1.0)) != 1.0:
+            raise ValueError("The S-only method has one unit-weight predictive loss.")
 
     successor = protocol.get("successor", {})
     locked = {
-        "objective_version": 1,
-        "architecture": "causal_gru_action_prefix",
+        "objective_version": 1 if method == METHOD else 2,
+        "architecture": (
+            "causal_gru_action_prefix"
+            if method == METHOD
+            else "causal_gru_successor_increments"
+        ),
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
-        "target": "direct_monte_carlo",
+        "target": (
+            "direct_monte_carlo"
+            if method == METHOD
+            else "online_direct_monte_carlo"
+        ),
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
         "continuation_policy": "none",
         "td_bootstrap": False,
     }
+    if method == S_ONLY_METHOD:
+        locked["latent_recovery"] = "exact_adjacent_successor_difference"
     for key, value in locked.items():
         if successor.get(key) != value:
             raise ValueError(f"successor.{key} must be {value!r}.")
@@ -118,18 +150,24 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("successor.max_horizon must equal the rollout horizon.")
     if int(successor.get("hidden_dim", 0)) <= 0:
         raise ValueError("successor.hidden_dim must be positive.")
-    if not 0.0 <= float(successor.get("gamma", -1.0)) <= 1.0:
+    gamma = float(successor.get("gamma", -1.0))
+    if not 0.0 <= gamma <= 1.0:
         raise ValueError("successor.gamma must lie in [0, 1].")
-    if not 0.0 <= float(successor.get("target_world_ema_decay", -1.0)) < 1.0:
-        raise ValueError("target_world_ema_decay must lie in [0, 1).")
-    if not 0.0 <= float(successor.get("loss_warmup_fraction", -1.0)) < 1.0:
-        raise ValueError("loss_warmup_fraction must lie in [0, 1).")
+    if method == S_ONLY_METHOD and gamma == 0.0:
+        raise ValueError("The S-only method requires gamma > 0 for latent recovery.")
+    if method == METHOD:
+        if not 0.0 <= float(successor.get("target_world_ema_decay", -1.0)) < 1.0:
+            raise ValueError("target_world_ema_decay must lie in [0, 1).")
+        if not 0.0 <= float(successor.get("loss_warmup_fraction", -1.0)) < 1.0:
+            raise ValueError("loss_warmup_fraction must lie in [0, 1).")
     planning_weight = float(successor.get("planning_weight", -1.0))
     terminal_weight = float(successor.get("terminal_weight", -1.0))
     if min(planning_weight, terminal_weight) < 0.0:
         raise ValueError("Successor planning weights cannot be negative.")
     if planning_weight + terminal_weight <= 0.0:
         raise ValueError("At least one planning cost must be active.")
+    if method == S_ONLY_METHOD and (planning_weight != 1.0 or terminal_weight != 0.0):
+        raise ValueError("The S-only primary planner must use only the successor score.")
 
     split = protocol.get("split", {})
     if split.get("unit") != "sequence_clip":
@@ -161,7 +199,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         "effective_batch_size", 0
     ))
     if effective_batch != configured_batch:
-        raise ValueError("The local LeWM/SIGReg effective batch size changed.")
+        raise ValueError("The overlapping-window SIGReg effective batch size changed.")
 
     training = protocol.get("training", {})
     if training.get("epochs") != training.get("scheduler_epochs"):
@@ -279,7 +317,7 @@ def ema_update_world_model(
             target_buffer.copy_(source_buffer)
 
 
-def _build_training_module(
+def _build_joint_training_module(
     world_model: Any,
     protocol: dict[str, Any],
     total_steps: int,
@@ -548,6 +586,221 @@ def _build_training_module(
     return RFSuccessorLeWMTrainingModule()
 
 
+def _build_successor_sequence_training_module(
+    world_model: Any,
+    protocol: dict[str, Any],
+    total_steps: int,
+    *,
+    action_block_dim: int,
+    device_image_preprocessing: bool,
+):
+    import lightning as pl
+    import stable_worldmodel as swm
+
+    class RFSuccessorSequenceTrainingModule(pl.LightningModule):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = world_model
+            for name in ("predictor", "action_encoder", "pred_proj"):
+                module = getattr(self.model, name, None)
+                if module is not None:
+                    module.requires_grad_(False)
+            self.device_image_preprocessing = device_image_preprocessing
+            if device_image_preprocessing:
+                image = protocol["image_preprocessing"]
+                self.register_buffer(
+                    "image_mean",
+                    torch.tensor(image["mean"], dtype=torch.float32).reshape(
+                        1, 1, 3, 1, 1
+                    ),
+                    persistent=False,
+                )
+                self.register_buffer(
+                    "image_std",
+                    torch.tensor(image["std"], dtype=torch.float32).reshape(
+                        1, 1, 3, 1, 1
+                    ),
+                    persistent=False,
+                )
+            sigreg = protocol["loss"]["sigreg"]
+            self.sigreg = swm.wm.SIGReg(
+                knots=sigreg["knots"], num_proj=sigreg["num_projections"]
+            )
+            successor = protocol["successor"]
+            self.successor = ActionPrefixMomentHead(
+                embed_dim=int(protocol["model"]["embed_dim"]),
+                action_dim=action_block_dim,
+                history_size=int(protocol["sequence"]["history_frames"]),
+                hidden_dim=int(successor["hidden_dim"]),
+                gamma=float(successor["gamma"]),
+            )
+            self.history_size = int(protocol["sequence"]["history_frames"])
+            self.horizon = int(protocol["sequence"]["rollout_horizon"])
+            self.gamma = float(successor["gamma"])
+
+        def _preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
+            if not self.device_image_preprocessing:
+                return pixels
+            return preprocess_image_batch(
+                pixels,
+                mean=self.image_mean,
+                std=self.image_std,
+                size=protocol["image_preprocessing"]["size"],
+            )
+
+        def _forward_loss(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
+            batch_size = int(batch["pixels"].shape[0])
+            episode_ids = batch.pop("_tdwm_episode_id", None)
+            cache_bytes = batch.pop("_tdwm_cache_bytes", None)
+            pixels = self._preprocess(batch["pixels"])
+            actions = torch.nan_to_num(batch["action"], 0.0)
+            encoder_input = {
+                key: value for key, value in batch.items() if key != "action"
+            }
+            encoder_input["pixels"] = pixels
+            embeddings = self.model.encode(encoder_input)["emb"]
+            expected_steps = int(protocol["sequence"]["num_steps"])
+            if embeddings.shape[1] != expected_steps:
+                raise RuntimeError("The encoded clip has an unexpected length.")
+
+            windows = build_multi_horizon_windows(
+                embeddings,
+                embeddings,
+                actions,
+                history_size=self.history_size,
+                horizon=self.horizon,
+            )
+            output = successor_sequence_objective(
+                self.successor,
+                windows.history,
+                windows.action_prefix,
+                windows.target_future,
+                gamma=self.gamma,
+            )
+
+            local_count = embeddings.shape[1] - self.history_size
+            sigreg_sequences = torch.cat(
+                [
+                    embeddings[:, start : start + self.history_size + 1]
+                    for start in range(local_count)
+                ],
+                dim=0,
+            )
+            sigreg_loss = self.sigreg(sigreg_sequences.transpose(0, 1))
+            loss = output.successor_loss + float(
+                protocol["loss"]["sigreg"]["weight"]
+            ) * sigreg_loss
+            metrics = {
+                f"{stage}/loss": loss.detach(),
+                f"{stage}/successor_sequence_loss": output.successor_loss.detach(),
+                f"{stage}/sigreg_loss": sigreg_loss.detach(),
+                f"{stage}/successor_mse_h1": (
+                    output.successor_mse_by_horizon[0].detach()
+                ),
+                f"{stage}/successor_mse_hK": (
+                    output.successor_mse_by_horizon[-1].detach()
+                ),
+                f"{stage}/recovered_latent_mse_h1": (
+                    output.recovered_latent_mse_by_horizon[0].detach()
+                ),
+                f"{stage}/recovered_latent_mse_hK": (
+                    output.recovered_latent_mse_by_horizon[-1].detach()
+                ),
+                f"{stage}/multi_horizon_windows": loss.new_tensor(
+                    float(windows.count_per_clip * batch_size)
+                ),
+            }
+            if episode_ids is not None:
+                metrics[f"{stage}/unique_episodes_per_batch"] = loss.new_tensor(
+                    float(torch.unique(episode_ids).numel())
+                )
+            if cache_bytes is not None:
+                metrics[f"{stage}/compressed_cache_gib"] = loss.new_tensor(
+                    float(cache_bytes) / 1024**3
+                )
+            self.log_dict(
+                metrics,
+                on_step=stage == "train",
+                on_epoch=True,
+                prog_bar=stage == "validation",
+                sync_dist=False,
+                batch_size=batch_size,
+            )
+            return loss
+
+        def training_step(self, batch: dict[str, Any], batch_idx: int):
+            del batch_idx
+            return self._forward_loss(batch, "train")
+
+        def validation_step(self, batch: dict[str, Any], batch_idx: int):
+            del batch_idx
+            return self._forward_loss(batch, "validation")
+
+        def configure_optimizers(self):
+            optimizer_cfg = protocol["optimizer"]
+            model_parameters = [
+                parameter
+                for parameter in self.model.parameters()
+                if parameter.requires_grad
+            ]
+            optimizer = torch.optim.AdamW(
+                [
+                    {
+                        "params": model_parameters,
+                        "lr": optimizer_cfg["world_model_learning_rate"],
+                    },
+                    {
+                        "params": list(self.successor.parameters()),
+                        "lr": optimizer_cfg["successor_learning_rate"],
+                    },
+                ],
+                weight_decay=optimizer_cfg["weight_decay"],
+            )
+            warmup_steps = max(
+                1, int(float(protocol["scheduler"]["warmup_fraction"]) * total_steps)
+            )
+
+            def learning_rate_scale(step: int) -> float:
+                if step < warmup_steps:
+                    return float(step + 1) / float(warmup_steps)
+                progress = (step - warmup_steps) / max(
+                    1, total_steps - warmup_steps
+                )
+                return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lr_lambda=learning_rate_scale
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+            }
+
+    return RFSuccessorSequenceTrainingModule()
+
+
+def _build_training_module(
+    world_model: Any,
+    protocol: dict[str, Any],
+    total_steps: int,
+    *,
+    action_block_dim: int,
+    device_image_preprocessing: bool,
+):
+    builder = (
+        _build_successor_sequence_training_module
+        if protocol["method"] == S_ONLY_METHOD
+        else _build_joint_training_module
+    )
+    return builder(
+        world_model,
+        protocol,
+        total_steps,
+        action_block_dim=action_block_dim,
+        device_image_preprocessing=device_image_preprocessing,
+    )
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -564,7 +817,7 @@ def _successor_config(
     base_checkpoint_sha256: str,
 ) -> dict[str, Any]:
     successor = protocol["successor"]
-    return {
+    config = {
         "objective_version": successor["objective_version"],
         "architecture": successor["architecture"],
         "embed_dim": protocol["model"]["embed_dim"],
@@ -583,10 +836,14 @@ def _successor_config(
         "planning_weight": successor["planning_weight"],
         "terminal_weight": successor["terminal_weight"],
         "clamp_successor_cost": successor["clamp_successor_cost"],
-        "target_world_ema_decay": successor["target_world_ema_decay"],
         "base_export_run_name": base_export_run_name,
         "base_checkpoint_sha256": base_checkpoint_sha256,
     }
+    if "target_world_ema_decay" in successor:
+        config["target_world_ema_decay"] = successor["target_world_ema_decay"]
+    if "latent_recovery" in successor:
+        config["latent_recovery"] = successor["latent_recovery"]
+    return config
 
 
 def _build_export_callback(
@@ -623,12 +880,13 @@ def _build_export_callback(
                     "Stable World Model export did not contain exactly one weight file."
                 )
             base_hash = _file_sha256(base_weights[0])
-            deployment_dir = run_dir / "checkpoints" / METHOD
+            method = protocol["method"]
+            deployment_dir = run_dir / "checkpoints" / method
             deployment_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
                 {
-                    "method": METHOD,
-                    "objective_version": 1,
+                    "method": method,
+                    "objective_version": protocol["successor"]["objective_version"],
                     "deployment_checkpoint_version": 1,
                     "epoch": epoch,
                     "global_step": int(trainer.global_step),
@@ -648,13 +906,13 @@ def _build_export_callback(
     return RFSuccessorExportCallback()
 
 
-def _build_generator_callback(generator: torch.Generator):
+def _build_generator_callback(generator: torch.Generator, *, method: str = METHOD):
     import lightning as pl
 
     class DataLoaderGeneratorCallback(pl.Callback):
         @property
         def state_key(self) -> str:
-            return "tdwm_rf_successor_dataloader_generator"
+            return f"tdwm_{method}_dataloader_generator"
 
         def state_dict(self) -> dict[str, Any]:
             return {"generator_state": generator.get_state()}
@@ -687,7 +945,7 @@ def train_rf_successor_lewm(
     max_steps: int | None = None,
     skip_validation: bool = False,
 ) -> dict[str, Any]:
-    """Train RF-Successor-LeWM independently of every existing method."""
+    """Train a reward-free successor method independently of the baselines."""
 
     protocol = load_rf_successor_training_protocol(protocol_path)
     if seed not in protocol["seeds"]:
@@ -893,7 +1151,7 @@ def train_rf_successor_lewm(
     callbacks = [
         checkpoint_callback,
         _build_export_callback(run_dir, model_config, protocol, action_block_dim),
-        _build_generator_callback(generator),
+        _build_generator_callback(generator, method=protocol["method"]),
     ]
     if episode_train_dataset is not None:
         callbacks.append(_build_episode_epoch_callback(episode_train_dataset))
@@ -938,7 +1196,7 @@ def train_rf_successor_lewm(
         with manifest_path.open() as stream:
             previous = json.load(stream)
         previous_protocol = previous.get("protocol", {})
-        if previous_protocol.get("method") != METHOD or previous_protocol.get(
+        if previous_protocol.get("method") != protocol["method"] or previous_protocol.get(
             "successor", {}
         ).get("objective_version") != protocol["successor"]["objective_version"]:
             raise RuntimeError("Refusing to resume an incompatible objective.")
@@ -957,7 +1215,7 @@ def train_rf_successor_lewm(
     write_json(
         run_dir / "training_manifest.json",
         {
-            "method": METHOD,
+            "method": protocol["method"],
             "protocol": protocol,
             "protocol_path": str(Path(protocol_path).resolve()),
             "seed": seed,
@@ -1011,6 +1269,7 @@ def train_rf_successor_lewm(
 
 __all__ = [
     "METHOD",
+    "S_ONLY_METHOD",
     "MultiHorizonWindows",
     "build_multi_horizon_windows",
     "ema_update_world_model",

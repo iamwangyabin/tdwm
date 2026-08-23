@@ -8,7 +8,10 @@ from typing import Any
 import torch
 from torch import nn
 
-from tdwm.methods.rf_successor_lewm import ActionPrefixSuccessorHead
+from tdwm.methods.rf_successor_lewm import (
+    ActionPrefixMomentHead,
+    ActionPrefixSuccessorHead,
+)
 from tdwm.methods.successor_geometry import latent_goal_cost, successor_goal_cost
 
 
@@ -18,7 +21,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
     def __init__(
         self,
         world_model: nn.Module,
-        successor: ActionPrefixSuccessorHead,
+        successor: ActionPrefixSuccessorHead | ActionPrefixMomentHead,
         *,
         max_horizon: int,
         successor_weight: float = 1.0,
@@ -85,36 +88,72 @@ class RewardFreeSuccessorLeWM(nn.Module):
         if not 0 < horizon <= self.max_horizon:
             raise ValueError("Planning horizon exceeds successor training coverage.")
 
-        observed_frames = int(info_dict["pixels"].shape[2])
-        rollout = self.world_model.rollout(
-            info_dict,
-            action_candidates,
-            history_size=self.history_size,
-        )
-        predicted = rollout.get("predicted_emb")
-        if predicted is None or predicted.ndim != 4:
-            raise ValueError(
-                "LeWM rollout must return (batch, samples, time, latent_dim)."
+        future = None
+        if self.terminal_weight > 0.0:
+            observed_frames = int(info_dict["pixels"].shape[2])
+            rollout = self.world_model.rollout(
+                info_dict,
+                action_candidates,
+                history_size=self.history_size,
             )
-        if predicted.shape[:2] != (batch, samples):
-            raise ValueError("LeWM rollout does not match the CEM candidate batch.")
-        if predicted.shape[-1] != self.successor.embed_dim:
-            raise ValueError("LeWM and successor latent dimensions differ.")
-        future = predicted[..., observed_frames:, :]
-        if future.shape[-2] != horizon:
-            raise ValueError("LeWM rollout future does not match the plan horizon.")
-
-        history = self._pad_history(predicted[..., :observed_frames, :])
+            predicted = rollout.get("predicted_emb")
+            if predicted is None or predicted.ndim != 4:
+                raise ValueError(
+                    "LeWM rollout must return (batch, samples, time, latent_dim)."
+                )
+            if predicted.shape[:2] != (batch, samples):
+                raise ValueError("LeWM rollout does not match the CEM candidate batch.")
+            if predicted.shape[-1] != self.successor.embed_dim:
+                raise ValueError("LeWM and successor latent dimensions differ.")
+            future = predicted[..., observed_frames:, :]
+            if future.shape[-2] != horizon:
+                raise ValueError("LeWM rollout future does not match the plan horizon.")
+            history = self._pad_history(predicted[..., :observed_frames, :])
+        else:
+            history = self._encoded_history_for_samples(
+                info_dict, batch=batch, samples=samples
+            )
         successor = self.successor(history, action_candidates)[..., -1, :]
         goal = self._goal_for_samples(info_dict, batch=batch, samples=samples)
         successor_cost = successor_goal_cost(successor, goal)
         if self.clamp_successor_cost:
             successor_cost = successor_cost.clamp_min(0.0)
-        terminal_cost = latent_goal_cost(future[..., -1, :], goal)
-        return (
-            self.successor_weight * successor_cost
-            + self.terminal_weight * terminal_cost
-        )
+        cost = self.successor_weight * successor_cost
+        if future is not None:
+            cost = cost + self.terminal_weight * latent_goal_cost(
+                future[..., -1, :], goal
+            )
+        return cost
+
+    def _encoded_history_for_samples(
+        self,
+        info: dict[str, Any],
+        *,
+        batch: int,
+        samples: int,
+    ) -> torch.Tensor:
+        encoded = info.get("emb")
+        if encoded is None:
+            initial = {
+                key: value[:, 0]
+                for key, value in info.items()
+                if torch.is_tensor(value)
+            }
+            initial.pop("action", None)
+            initial.pop("act_emb", None)
+            encoded = self.world_model.encode(initial)["emb"].detach().unsqueeze(1)
+        elif encoded.ndim == 3:
+            encoded = encoded.unsqueeze(1)
+        if encoded.ndim != 4 or encoded.shape[0] != batch:
+            raise ValueError("Encoded history must have shape (batch, samples, time, dim).")
+        if encoded.shape[1] == 1:
+            encoded = encoded.expand(batch, samples, -1, -1)
+        elif encoded.shape[1] != samples:
+            raise ValueError("Cached history does not match the CEM sample count.")
+        if encoded.shape[-1] != self.successor.embed_dim:
+            raise ValueError("Encoded history and successor latent dimensions differ.")
+        info["emb"] = encoded
+        return self._pad_history(encoded)
 
     def _pad_history(self, history: torch.Tensor) -> torch.Tensor:
         if history.shape[-1] != self.successor.embed_dim:
@@ -168,10 +207,12 @@ def load_rf_successor_checkpoint(
         map_location=map_location,
         weights_only=False,
     )
-    if payload.get("method") != "rf_successor_lewm":
-        raise ValueError("The checkpoint is not RF-Successor-LeWM.")
-    if payload.get("objective_version") != 1:
-        raise ValueError("RF-Successor-LeWM requires objective version 1.")
+    method = payload.get("method")
+    if method not in {"rf_successor_lewm", "rf_successor_sequence_wm"}:
+        raise ValueError("The checkpoint is not a supported reward-free successor model.")
+    objective_version = payload.get("objective_version")
+    if objective_version not in {1, 2}:
+        raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
     if "world_model_state_dict" not in payload:
@@ -181,12 +222,22 @@ def load_rf_successor_checkpoint(
         raise ValueError("The successor checkpoint is not reward-free.")
     if config.get("action_conditioning") != "causal_prefix":
         raise ValueError("The successor checkpoint is not action-prefix conditioned.")
-    head = ActionPrefixSuccessorHead(
-        embed_dim=int(config["embed_dim"]),
-        action_dim=int(config["action_dim"]),
-        history_size=int(config["history_size"]),
-        hidden_dim=int(config["hidden_dim"]),
-    )
+    head_kwargs = {
+        "embed_dim": int(config["embed_dim"]),
+        "action_dim": int(config["action_dim"]),
+        "history_size": int(config["history_size"]),
+        "hidden_dim": int(config["hidden_dim"]),
+    }
+    if objective_version == 2:
+        if method != "rf_successor_sequence_wm" or config.get(
+            "architecture"
+        ) != "causal_gru_successor_increments":
+            raise ValueError("Objective version 2 requires the S-only architecture.")
+        head = ActionPrefixMomentHead(gamma=float(config["gamma"]), **head_kwargs)
+    else:
+        if method != "rf_successor_lewm":
+            raise ValueError("Objective version 1 requires RF-Successor-LeWM.")
+        head = ActionPrefixSuccessorHead(**head_kwargs)
     head.load_state_dict(payload["successor_state_dict"])
     head.eval()
     head.requires_grad_(False)
@@ -196,7 +247,7 @@ def load_rf_successor_checkpoint(
 def make_rf_successor_policy(
     *,
     world_model: nn.Module,
-    successor: ActionPrefixSuccessorHead,
+    successor: ActionPrefixSuccessorHead | ActionPrefixMomentHead,
     planning: dict[str, Any],
     successor_config: dict[str, Any],
     process: dict[str, Any] | None = None,
