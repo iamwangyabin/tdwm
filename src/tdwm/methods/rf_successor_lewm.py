@@ -293,6 +293,21 @@ class SuccessorSequenceOutput:
     recovered_latent_mse_by_horizon: torch.Tensor
 
 
+@dataclass(frozen=True)
+class MomentSequenceOutput:
+    """Direct all-horizon moment supervision with derived successors."""
+
+    moments: torch.Tensor
+    target_moments: torch.Tensor
+    prediction: torch.Tensor
+    target: torch.Tensor
+    recovered_future: torch.Tensor
+    moment_loss: torch.Tensor
+    moment_mse_by_horizon: torch.Tensor
+    successor_mse_by_horizon: torch.Tensor
+    recovered_latent_mse_by_horizon: torch.Tensor
+
+
 def _mse_by_horizon(error: torch.Tensor) -> torch.Tensor:
     dimensions = tuple(range(error.ndim - 2)) + (error.ndim - 1,)
     return error.square().mean(dim=dimensions)
@@ -375,10 +390,56 @@ def successor_sequence_objective(
     )
 
 
+def moment_sequence_objective(
+    head: ActionPrefixMomentHead,
+    latent_history: torch.Tensor,
+    action_prefix: torch.Tensor,
+    target_future: torch.Tensor,
+    *,
+    gamma: float,
+    vector_reduction: str = "group_sum",
+) -> MomentSequenceOutput:
+    """Supervise every future lifted moment with stop-gradient targets."""
+
+    if target_future.shape[:-2] != latent_history.shape[:-2]:
+        raise ValueError("future and history leading shapes must match.")
+    if target_future.shape[-2] != action_prefix.shape[-2]:
+        raise ValueError("future and action-prefix horizons must match.")
+    if target_future.shape[-1] != head.embed_dim:
+        raise ValueError("future latents and the successor head must share a dimension.")
+    if not math.isclose(float(gamma), head.gamma):
+        raise ValueError("The objective gamma differs from the head gamma.")
+
+    detached_target = target_future.detach()
+    target_moments = successor_feature_basis(detached_target)
+    moments = head.predict_moments(latent_history, action_prefix)
+    prediction = finite_horizon_successor_from_moments(moments, gamma=gamma)
+    target = finite_horizon_successor_from_moments(target_moments, gamma=gamma)
+    recovered_future = latent_sequence_from_successor(prediction, gamma=gamma)
+    return MomentSequenceOutput(
+        moments=moments,
+        target_moments=target_moments,
+        prediction=prediction,
+        target=target,
+        recovered_future=recovered_future,
+        moment_loss=balanced_successor_mse(
+            moments,
+            target_moments,
+            vector_reduction=vector_reduction,
+        ),
+        moment_mse_by_horizon=_mse_by_horizon(moments - target_moments),
+        successor_mse_by_horizon=_mse_by_horizon(prediction - target),
+        recovered_latent_mse_by_horizon=_mse_by_horizon(
+            recovered_future - detached_target
+        ),
+    )
+
+
 __all__ = [
     "ActionPrefixMomentHead",
     "ActionPrefixSuccessorHead",
     "MultiHorizonSuccessorOutput",
+    "MomentSequenceOutput",
     "SuccessorSequenceOutput",
     "balanced_successor_mse",
     "discounted_prefix_mass",
@@ -386,6 +447,7 @@ __all__ = [
     "finite_horizon_successor_targets",
     "latent_sequence_from_successor",
     "multi_horizon_successor_objective",
+    "moment_sequence_objective",
     "successor_moments_from_sequence",
     "successor_recurrence_residual",
     "successor_sequence_objective",

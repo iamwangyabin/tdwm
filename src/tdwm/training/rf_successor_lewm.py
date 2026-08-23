@@ -21,6 +21,7 @@ from tdwm.adapters import prepare_cloud_runtime
 from tdwm.methods.rf_successor_lewm import (
     ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
+    moment_sequence_objective,
     multi_horizon_successor_objective,
     successor_sequence_objective,
 )
@@ -48,8 +49,14 @@ METHOD = "rf_successor_lewm"
 S_ONLY_METHOD = "rf_successor_sequence_wm"
 BALANCED_SEQUENCE_METHOD = "rf_balanced_successor_sequence_wm"
 EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
+DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
 SEQUENCE_METHODS = frozenset(
-    (S_ONLY_METHOD, BALANCED_SEQUENCE_METHOD, EMA_BALANCED_SEQUENCE_METHOD)
+    (
+        S_ONLY_METHOD,
+        BALANCED_SEQUENCE_METHOD,
+        EMA_BALANCED_SEQUENCE_METHOD,
+        DIRECT_MOMENT_METHOD,
+    )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
 
@@ -110,24 +117,38 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         if float(objective.get("successor_weight", 0.0)) <= 0.0:
             raise ValueError("The direct successor supervision must remain active.")
     else:
-        expected = {
-            "primitive_prediction": "successor_sequence",
-            "single_step": "horizon_one_successor",
-            "multi_step_prediction": "recovered_from_successor_increments",
-            "consistency": "architectural_discounted_cumsum",
-            "target_encoder": (
-                "ema_stop_gradient"
-                if method == EMA_BALANCED_SEQUENCE_METHOD
-                else "online_end_to_end"
-            ),
-            "goal_conditioning": "none",
-            "policy": "none",
-            "bootstrap": "none",
-        }
+        if method == DIRECT_MOMENT_METHOD:
+            expected = {
+                "primitive_prediction": "future_moment_sequence",
+                "single_step": "horizon_one_moment",
+                "multi_step_prediction": "all_horizon_moments",
+                "consistency": "architectural_discounted_cumsum",
+                "target_encoder": "online_stop_gradient",
+                "goal_conditioning": "none",
+                "policy": "none",
+                "bootstrap": "none",
+            }
+            predictive_weight_key = "moment_sequence_weight"
+        else:
+            expected = {
+                "primitive_prediction": "successor_sequence",
+                "single_step": "horizon_one_successor",
+                "multi_step_prediction": "recovered_from_successor_increments",
+                "consistency": "architectural_discounted_cumsum",
+                "target_encoder": (
+                    "ema_stop_gradient"
+                    if method == EMA_BALANCED_SEQUENCE_METHOD
+                    else "online_end_to_end"
+                ),
+                "goal_conditioning": "none",
+                "policy": "none",
+                "bootstrap": "none",
+            }
+            predictive_weight_key = "successor_sequence_weight"
         for key, value in expected.items():
             if objective.get(key) != value:
                 raise ValueError(f"joint_objective.{key} must be {value!r}.")
-        if float(objective.get("successor_sequence_weight", -1.0)) != 1.0:
+        if float(objective.get(predictive_weight_key, -1.0)) != 1.0:
             raise ValueError("The S-only method has one unit-weight predictive loss.")
 
     successor = protocol.get("successor", {})
@@ -137,6 +158,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             S_ONLY_METHOD: 2,
             BALANCED_SEQUENCE_METHOD: 3,
             EMA_BALANCED_SEQUENCE_METHOD: 4,
+            DIRECT_MOMENT_METHOD: 5,
         }[method],
         "architecture": (
             "causal_gru_action_prefix"
@@ -150,6 +172,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             S_ONLY_METHOD: "online_direct_monte_carlo",
             BALANCED_SEQUENCE_METHOD: "online_direct_monte_carlo",
             EMA_BALANCED_SEQUENCE_METHOD: "ema_direct_monte_carlo",
+            DIRECT_MOMENT_METHOD: "online_stop_gradient_direct_moments",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -158,7 +181,11 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     }
     if method in SEQUENCE_METHODS:
         locked["latent_recovery"] = "exact_adjacent_successor_difference"
-    if method in {BALANCED_SEQUENCE_METHOD, EMA_BALANCED_SEQUENCE_METHOD}:
+    if method in {
+        BALANCED_SEQUENCE_METHOD,
+        EMA_BALANCED_SEQUENCE_METHOD,
+        DIRECT_MOMENT_METHOD,
+    }:
         locked["feature_group_reduction"] = "group_sum"
     for key, value in locked.items():
         if successor.get(key) != value:
@@ -715,16 +742,31 @@ def _build_successor_sequence_training_module(
                 history_size=self.history_size,
                 horizon=self.horizon,
             )
-            output = successor_sequence_objective(
-                self.successor,
-                windows.history,
-                windows.action_prefix,
-                windows.target_future,
-                gamma=self.gamma,
-                vector_reduction=protocol["successor"].get(
-                    "feature_group_reduction", "coordinate_mean"
-                ),
+            vector_reduction = protocol["successor"].get(
+                "feature_group_reduction", "coordinate_mean"
             )
+            if protocol["method"] == DIRECT_MOMENT_METHOD:
+                output = moment_sequence_objective(
+                    self.successor,
+                    windows.history,
+                    windows.action_prefix,
+                    windows.target_future,
+                    gamma=self.gamma,
+                    vector_reduction=vector_reduction,
+                )
+                predictive_loss = output.moment_loss
+                predictive_metric = "moment_sequence_loss"
+            else:
+                output = successor_sequence_objective(
+                    self.successor,
+                    windows.history,
+                    windows.action_prefix,
+                    windows.target_future,
+                    gamma=self.gamma,
+                    vector_reduction=vector_reduction,
+                )
+                predictive_loss = output.successor_loss
+                predictive_metric = "successor_sequence_loss"
 
             local_count = embeddings.shape[1] - self.history_size
             sigreg_sequences = torch.cat(
@@ -735,12 +777,12 @@ def _build_successor_sequence_training_module(
                 dim=0,
             )
             sigreg_loss = self.sigreg(sigreg_sequences.transpose(0, 1))
-            loss = output.successor_loss + float(
+            loss = predictive_loss + float(
                 protocol["loss"]["sigreg"]["weight"]
             ) * sigreg_loss
             metrics = {
                 f"{stage}/loss": loss.detach(),
-                f"{stage}/successor_sequence_loss": output.successor_loss.detach(),
+                f"{stage}/{predictive_metric}": predictive_loss.detach(),
                 f"{stage}/sigreg_loss": sigreg_loss.detach(),
                 f"{stage}/successor_mse_h1": (
                     output.successor_mse_by_horizon[0].detach()
@@ -758,6 +800,13 @@ def _build_successor_sequence_training_module(
                     float(windows.count_per_clip * batch_size)
                 ),
             }
+            if protocol["method"] == DIRECT_MOMENT_METHOD:
+                metrics[f"{stage}/moment_mse_h1"] = (
+                    output.moment_mse_by_horizon[0].detach()
+                )
+                metrics[f"{stage}/moment_mse_hK"] = (
+                    output.moment_mse_by_horizon[-1].detach()
+                )
             if episode_ids is not None:
                 metrics[f"{stage}/unique_episodes_per_batch"] = loss.new_tensor(
                     float(torch.unique(episode_ids).numel())
@@ -1332,6 +1381,7 @@ def train_rf_successor_lewm(
 __all__ = [
     "METHOD",
     "BALANCED_SEQUENCE_METHOD",
+    "DIRECT_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",

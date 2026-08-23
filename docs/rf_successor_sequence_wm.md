@@ -114,3 +114,12 @@ stop-gradient EMA copy of the online encoder (`decay = 0.995`). The online
 encoder still receives predictive gradients through the history branch and
 SIGReg. This isolates whether moving both sides of the same prediction error
 causes representation drift; the EMA network is discarded at inference.
+
+## Direct moment controlled variant
+
+`rf_direct_moment_sequence_wm` directly supervises every lifted future moment
+against a stop-gradient online target. This removes the cumulative-prefix
+attenuation of late horizons: `m_1,...,m_K` receive equal predictive weight,
+while `S_1,...,S_K` are still produced by the exact discounted cumulative sum.
+It remains one predictive loss plus SIGReg, with no LeWM dynamics loss, EMA
+network, recurrence penalty, reward, goal, value bootstrap, or policy.
