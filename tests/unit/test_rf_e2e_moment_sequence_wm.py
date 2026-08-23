@@ -79,6 +79,21 @@ def test_e2e_moment_evaluation_protocol_stays_successor_only():
     assert protocol["inference_objective"]["autoregressive_rollout"] == "disabled"
 
 
+def test_e2e_terminal_query_protocol_changes_only_the_goal_query():
+    standard = load_rf_successor_evaluation_protocol(
+        "configs/experiment/rf_e2e_moment_sequence_wm_cube_checkpoint_o50.yaml"
+    )
+    terminal = load_rf_successor_evaluation_protocol(
+        "configs/experiment/rf_e2e_moment_sequence_wm_cube_terminal_o50.yaml"
+    )
+
+    assert terminal["successor"]["planning_query"] == "terminal_moment"
+    terminal["successor"].pop("planning_query")
+    for key in ("id", "display_name", "inference_objective", "provenance"):
+        terminal[key] = standard[key]
+    assert terminal == standard
+
+
 def test_e2e_moment_checkpoint_round_trip(tmp_path):
     head = ActionPrefixMomentHead(
         embed_dim=4,

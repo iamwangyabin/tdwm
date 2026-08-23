@@ -122,6 +122,11 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         or float(successor.get("terminal_weight", -1.0)) != 0.0
     ):
         raise ValueError("The S-only planner must use only the successor score.")
+    planning_query = successor.get("planning_query", "discounted_successor")
+    if planning_query not in {"discounted_successor", "terminal_moment"}:
+        raise ValueError("Unsupported successor planning query.")
+    if planning_query == "terminal_moment" and method not in SEQUENCE_METHODS:
+        raise ValueError("Terminal-moment planning requires a sequence checkpoint.")
 
     planning = protocol.get("planning", {})
     missing = REQUIRED_PLANNING_KEYS - planning.keys()

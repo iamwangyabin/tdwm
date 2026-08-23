@@ -11,6 +11,7 @@ from tdwm.evaluation.rf_successor_lewm import (
     load_rf_successor_evaluation_protocol,
 )
 from tdwm.methods.rf_successor_lewm import (
+    ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
     finite_horizon_successor_targets,
     multi_horizon_successor_objective,
@@ -180,6 +181,40 @@ def test_planner_queries_supplied_prefix_without_an_actor():
     # Successor point [2, 0] has mean squared cost 2; terminal [4, 0] has 8.
     assert torch.allclose(cost, torch.tensor([[6.0]]))
     assert not hasattr(adapter, "get_action")
+
+
+def test_planner_can_query_the_terminal_predicted_moment():
+    head = ActionPrefixMomentHead(
+        embed_dim=2,
+        action_dim=1,
+        history_size=1,
+        hidden_dim=4,
+        gamma=1.0,
+    )
+
+    def fixed_moments(history, actions):
+        del history
+        latent = torch.tensor([[2.0, 0.0], [4.0, 0.0]], device=actions.device)
+        moments = successor_feature_basis(latent).to(actions)
+        return moments.expand(*actions.shape[:-2], -1, -1)
+
+    head.predict_moments = fixed_moments
+    adapter = RewardFreeSuccessorLeWM(
+        FakeWorldModel(torch.zeros(1, 1, 1, 2)),
+        head,
+        max_horizon=2,
+        clamp_successor_cost=False,
+        planning_query="terminal_moment",
+    )
+    info = {
+        "pixels": torch.zeros(1, 1, 1, 2),
+        "goal_emb": torch.zeros(1, 1, 2),
+    }
+
+    cost = adapter.get_cost(info, torch.zeros(1, 1, 2, 1))
+
+    # The terminal predicted latent is [4, 0], whose mean squared cost is 8.
+    assert torch.allclose(cost, torch.tensor([[8.0]]))
 
 
 def test_reward_free_successor_checkpoint_round_trip(tmp_path):

@@ -27,6 +27,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
         successor_weight: float = 1.0,
         terminal_weight: float = 0.0,
         clamp_successor_cost: bool = True,
+        planning_query: str = "discounted_successor",
     ) -> None:
         super().__init__()
         if max_horizon <= 0:
@@ -35,12 +36,19 @@ class RewardFreeSuccessorLeWM(nn.Module):
             raise ValueError("Planning weights must be non-negative.")
         if successor_weight + terminal_weight <= 0.0:
             raise ValueError("At least one planning cost must have positive weight.")
+        if planning_query not in {"discounted_successor", "terminal_moment"}:
+            raise ValueError("Unsupported reward-free planning query.")
+        if planning_query == "terminal_moment" and not hasattr(
+            successor, "predict_moments"
+        ):
+            raise ValueError("Terminal-moment planning requires a moment head.")
         self.world_model = world_model
         self.successor = successor
         self.max_horizon = int(max_horizon)
         self.successor_weight = float(successor_weight)
         self.terminal_weight = float(terminal_weight)
         self.clamp_successor_cost = bool(clamp_successor_cost)
+        self.planning_query = planning_query
 
     @property
     def history_size(self) -> int:
@@ -113,9 +121,14 @@ class RewardFreeSuccessorLeWM(nn.Module):
             history = self._encoded_history_for_samples(
                 info_dict, batch=batch, samples=samples
             )
-        successor = self.successor(history, action_candidates)[..., -1, :]
+        if self.planning_query == "terminal_moment":
+            score_features = self.successor.predict_moments(
+                history, action_candidates
+            )[..., -1, :]
+        else:
+            score_features = self.successor(history, action_candidates)[..., -1, :]
         goal = self._goal_for_samples(info_dict, batch=batch, samples=samples)
-        successor_cost = successor_goal_cost(successor, goal)
+        successor_cost = successor_goal_cost(score_features, goal)
         if self.clamp_successor_cost:
             successor_cost = successor_cost.clamp_min(0.0)
         cost = self.successor_weight * successor_cost
@@ -299,6 +312,9 @@ def make_rf_successor_policy(
         terminal_weight=float(successor_config.get("terminal_weight", 0.0)),
         clamp_successor_cost=bool(
             successor_config.get("clamp_successor_cost", True)
+        ),
+        planning_query=str(
+            successor_config.get("planning_query", "discounted_successor")
         ),
     ).to(device)
     wrapped.eval()
