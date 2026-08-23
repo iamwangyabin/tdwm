@@ -42,6 +42,21 @@ class LeWMCheckpointProtocolTest(unittest.TestCase):
         self.assertEqual(protocol["checkpoint"]["epoch"], 10)
         self.assertEqual(protocol["planning"]["iterations"], 30)
 
+    def test_seed3072_o50_protocol_matches_successor_control_budget(self):
+        protocol = load_protocol(
+            ROOT / "configs/experiment/lewm_cube_seed3072_o50.yaml"
+        )
+
+        self.assertEqual(protocol["evaluation"]["goal_offset"], 50)
+        self.assertEqual(protocol["planning"]["receding_horizon"], 1)
+        self.assertEqual(
+            protocol["planning"]["executed_environment_steps_before_replanning"],
+            5,
+        )
+        self.assertEqual(protocol["planning"]["episode_budget"], 100)
+        self.assertEqual(protocol["planning"]["candidates"], 300)
+        self.assertEqual(protocol["planning"]["iterations"], 30)
+
     def test_sampler_is_deterministic_and_respects_goal_offset(self):
         lengths = np.array([10, 12, 8])
         first = sample_start_goal_pairs(
