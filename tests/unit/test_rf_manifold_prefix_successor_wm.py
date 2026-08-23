@@ -3,15 +3,21 @@ from __future__ import annotations
 import math
 
 import torch
+from torch import nn
 
-from tdwm.adapters.rf_successor_lewm import load_rf_successor_checkpoint
+from tdwm.adapters.rf_successor_lewm import (
+    RewardFreeSuccessorLeWM,
+    load_rf_successor_checkpoint,
+)
 from tdwm.evaluation.rf_successor_lewm import (
     load_rf_successor_evaluation_protocol,
 )
 from tdwm.methods.rf_successor_lewm import (
     ManifoldTransformerMomentHead,
+    finite_horizon_successor_from_moments,
     manifold_sequence_objective,
 )
+from tdwm.methods.successor_geometry import successor_goal_cost
 from tdwm.training.rf_successor_lewm import (
     load_rf_successor_training_protocol,
 )
@@ -31,6 +37,11 @@ def _small_head() -> ManifoldTransformerMomentHead:
         fusion_dim=24,
         dropout=0.0,
     )
+
+
+class _UnusedWorldModel(nn.Module):
+    def encode(self, info):
+        return {"emb": info["pixels"]}
 
 
 def test_manifold_prefix_head_is_causal_and_action_conditioned():
@@ -167,6 +178,60 @@ def test_manifold_terminal_protocol_changes_only_the_goal_query():
     for key in ("id", "display_name", "inference_objective", "provenance"):
         terminal[key] = standard[key]
     assert terminal == standard
+
+
+def test_manifold_blend_protocol_changes_only_the_goal_query():
+    standard = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_manifold_prefix_successor_wm_cube_checkpoint_o50.yaml"
+    )
+    blended = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_manifold_prefix_successor_wm_cube_blend_o50.yaml"
+    )
+
+    assert blended["successor"]["planning_query"] == (
+        "discounted_terminal_blend"
+    )
+    assert blended["successor"]["terminal_query_weight"] == 0.5
+    blended["successor"].pop("planning_query")
+    blended["successor"].pop("terminal_query_weight")
+    for key in ("id", "display_name", "inference_objective", "provenance"):
+        blended[key] = standard[key]
+    assert blended == standard
+
+
+def test_blended_query_is_the_exact_convex_combination_of_goal_costs():
+    torch.manual_seed(53)
+    head = _small_head().eval()
+    adapter = RewardFreeSuccessorLeWM(
+        _UnusedWorldModel(),
+        head,
+        max_horizon=5,
+        planning_query="discounted_terminal_blend",
+        terminal_query_weight=0.5,
+    )
+    history = torch.randn(1, 2, 8)
+    actions = torch.randn(1, 2, 5, 3)
+    goal = torch.randn(1, 8)
+    info = {
+        "pixels": torch.zeros(1, 1, 1),
+        "emb": history.unsqueeze(1),
+        "goal_emb": goal,
+    }
+
+    cost = adapter.get_cost(info, actions)
+    expanded_history = history.unsqueeze(1).expand(1, 2, 2, 8)
+    moments = head.predict_moments(expanded_history, actions)
+    discounted = finite_horizon_successor_from_moments(
+        moments, gamma=head.gamma
+    )[..., -1, :]
+    expected = successor_goal_cost(
+        0.5 * discounted + 0.5 * moments[..., -1, :],
+        goal.unsqueeze(1).expand(1, 2, 8),
+    )
+
+    assert torch.allclose(cost, expected, atol=1e-6)
 
 
 def test_manifold_prefix_checkpoint_round_trip(tmp_path):

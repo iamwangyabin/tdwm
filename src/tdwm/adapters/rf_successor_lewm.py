@@ -39,6 +39,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
         terminal_weight: float = 0.0,
         clamp_successor_cost: bool = True,
         planning_query: str = "discounted_successor",
+        terminal_query_weight: float = 0.5,
     ) -> None:
         super().__init__()
         if max_horizon <= 0:
@@ -49,6 +50,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
             raise ValueError("At least one planning cost must have positive weight.")
         if planning_query not in {
             "discounted_successor",
+            "discounted_terminal_blend",
             "manifold_projected_successor",
             "terminal_moment",
         }:
@@ -58,6 +60,10 @@ class RewardFreeSuccessorLeWM(nn.Module):
             and not hasattr(successor, "predict_moments")
         ):
             raise ValueError("The selected planning query requires a moment head.")
+        if planning_query == "discounted_terminal_blend" and not (
+            0.0 < terminal_query_weight < 1.0
+        ):
+            raise ValueError("terminal_query_weight must lie strictly between 0 and 1.")
         self.world_model = world_model
         self.successor = successor
         self.max_horizon = int(max_horizon)
@@ -65,6 +71,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
         self.terminal_weight = float(terminal_weight)
         self.clamp_successor_cost = bool(clamp_successor_cost)
         self.planning_query = planning_query
+        self.terminal_query_weight = float(terminal_query_weight)
 
     @property
     def history_size(self) -> int:
@@ -143,6 +150,15 @@ class RewardFreeSuccessorLeWM(nn.Module):
             moments = self.successor.predict_moments(history, action_candidates)
             if self.planning_query == "terminal_moment":
                 score_features = moments[..., -1, :]
+            elif self.planning_query == "discounted_terminal_blend":
+                discounted = finite_horizon_successor_from_moments(
+                    moments,
+                    gamma=self.successor.gamma,
+                )[..., -1, :]
+                score_features = (
+                    (1.0 - self.terminal_query_weight) * discounted
+                    + self.terminal_query_weight * moments[..., -1, :]
+                )
             else:
                 latent = moments[..., : self.successor.embed_dim] * math.sqrt(
                     self.successor.embed_dim
@@ -374,6 +390,9 @@ def make_rf_successor_policy(
         ),
         planning_query=str(
             successor_config.get("planning_query", "discounted_successor")
+        ),
+        terminal_query_weight=float(
+            successor_config.get("terminal_query_weight", 0.5)
         ),
     ).to(device)
     wrapped.eval()

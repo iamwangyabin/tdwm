@@ -152,12 +152,23 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
     planning_query = successor.get("planning_query", "discounted_successor")
     if planning_query not in {
         "discounted_successor",
+        "discounted_terminal_blend",
         "manifold_projected_successor",
         "terminal_moment",
     }:
         raise ValueError("Unsupported successor planning query.")
     if planning_query != "discounted_successor" and method not in SEQUENCE_METHODS:
         raise ValueError("The selected planning query requires a sequence checkpoint.")
+    query_weight = successor.get("terminal_query_weight")
+    if planning_query == "discounted_terminal_blend":
+        if query_weight is None or not 0.0 < float(query_weight) < 1.0:
+            raise ValueError(
+                "The blended query requires terminal_query_weight in (0, 1)."
+            )
+    elif query_weight is not None:
+        raise ValueError(
+            "terminal_query_weight is only valid for the blended planning query."
+        )
 
     planning = protocol.get("planning", {})
     missing = REQUIRED_PLANNING_KEYS - planning.keys()
