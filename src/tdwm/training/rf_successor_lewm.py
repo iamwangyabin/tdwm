@@ -54,7 +54,11 @@ EMA_BALANCED_SEQUENCE_METHOD = "rf_ema_balanced_successor_sequence_wm"
 DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
 E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
 MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
+EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
 DIRECT_MOMENT_METHODS = frozenset((DIRECT_MOMENT_METHOD, E2E_MOMENT_METHOD))
+MANIFOLD_PREFIX_METHODS = frozenset(
+    (MANIFOLD_PREFIX_METHOD, EMA_MANIFOLD_PREFIX_METHOD)
+)
 SEQUENCE_METHODS = frozenset(
     (
         S_ONLY_METHOD,
@@ -63,6 +67,7 @@ SEQUENCE_METHODS = frozenset(
         DIRECT_MOMENT_METHOD,
         E2E_MOMENT_METHOD,
         MANIFOLD_PREFIX_METHOD,
+        EMA_MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -124,13 +129,17 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         if float(objective.get("successor_weight", 0.0)) <= 0.0:
             raise ValueError("The direct successor supervision must remain active.")
     else:
-        if method == MANIFOLD_PREFIX_METHOD:
+        if method in MANIFOLD_PREFIX_METHODS:
             expected = {
                 "primitive_prediction": "future_latent_sequence",
                 "single_step": "horizon_one_latent",
                 "multi_step_prediction": "all_horizon_latents",
                 "consistency": "exact_manifold_successor_cumsum",
-                "target_encoder": "online_end_to_end",
+                "target_encoder": (
+                    "ema_stop_gradient"
+                    if method == EMA_MANIFOLD_PREFIX_METHOD
+                    else "online_end_to_end"
+                ),
                 "goal_conditioning": "none",
                 "policy": "none",
                 "bootstrap": "none",
@@ -184,6 +193,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             DIRECT_MOMENT_METHOD: 5,
             E2E_MOMENT_METHOD: 6,
             MANIFOLD_PREFIX_METHOD: 7,
+            EMA_MANIFOLD_PREFIX_METHOD: 8,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -193,6 +203,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             DIRECT_MOMENT_METHOD: "causal_gru_successor_increments",
             E2E_MOMENT_METHOD: "causal_gru_successor_increments",
             MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+            EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -204,6 +215,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             DIRECT_MOMENT_METHOD: "online_stop_gradient_direct_moments",
             E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
             MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
+            EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -213,7 +225,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     if method in SEQUENCE_METHODS:
         locked["latent_recovery"] = (
             "direct_manifold_latents"
-            if method == MANIFOLD_PREFIX_METHOD
+            if method in MANIFOLD_PREFIX_METHODS
             else "exact_adjacent_successor_difference"
         )
     if method in {
@@ -228,7 +240,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError(f"successor.{key} must be {value!r}.")
     if int(successor.get("max_horizon", 0)) != horizon:
         raise ValueError("successor.max_horizon must equal the rollout horizon.")
-    if method == MANIFOLD_PREFIX_METHOD:
+    if method in MANIFOLD_PREFIX_METHODS:
         architecture_dimensions = (
             "prefix_depth",
             "prefix_heads",
@@ -255,7 +267,10 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError("target_world_ema_decay must lie in [0, 1).")
         if not 0.0 <= float(successor.get("loss_warmup_fraction", -1.0)) < 1.0:
             raise ValueError("loss_warmup_fraction must lie in [0, 1).")
-    if method == EMA_BALANCED_SEQUENCE_METHOD and not 0.0 <= float(
+    if method in {
+        EMA_BALANCED_SEQUENCE_METHOD,
+        EMA_MANIFOLD_PREFIX_METHOD,
+    } and not 0.0 <= float(
         successor.get("target_world_ema_decay", -1.0)
     ) < 1.0:
         raise ValueError("target_world_ema_decay must lie in [0, 1).")
@@ -706,9 +721,10 @@ def _build_successor_sequence_training_module(
                 module = getattr(self.model, name, None)
                 if module is not None:
                     module.requires_grad_(False)
-            self.use_ema_target = (
-                protocol["method"] == EMA_BALANCED_SEQUENCE_METHOD
-            )
+            self.use_ema_target = protocol["method"] in {
+                EMA_BALANCED_SEQUENCE_METHOD,
+                EMA_MANIFOLD_PREFIX_METHOD,
+            }
             if self.use_ema_target:
                 self.target_model = copy.deepcopy(self.model).requires_grad_(False)
                 self.target_model.eval()
@@ -743,7 +759,7 @@ def _build_successor_sequence_training_module(
                 "history_size": int(protocol["sequence"]["history_frames"]),
                 "gamma": float(successor["gamma"]),
             }
-            if protocol["method"] == MANIFOLD_PREFIX_METHOD:
+            if protocol["method"] in MANIFOLD_PREFIX_METHODS:
                 self.successor = ManifoldTransformerMomentHead(
                     **head_dimensions,
                     prefix_depth=int(successor["prefix_depth"]),
@@ -811,13 +827,16 @@ def _build_successor_sequence_training_module(
             vector_reduction = protocol["successor"].get(
                 "feature_group_reduction", "coordinate_mean"
             )
-            if protocol["method"] == MANIFOLD_PREFIX_METHOD:
+            if protocol["method"] in MANIFOLD_PREFIX_METHODS:
                 output = manifold_sequence_objective(
                     self.successor,
                     windows.history,
                     windows.action_prefix,
                     windows.target_future,
                     gamma=self.gamma,
+                    detach_target=(
+                        protocol["method"] == EMA_MANIFOLD_PREFIX_METHOD
+                    ),
                 )
                 predictive_loss = output.latent_loss
                 predictive_metric = "latent_sequence_loss"
@@ -884,7 +903,7 @@ def _build_successor_sequence_training_module(
                 metrics[f"{stage}/moment_mse_hK"] = (
                     output.moment_mse_by_horizon[-1].detach()
                 )
-            elif protocol["method"] == MANIFOLD_PREFIX_METHOD:
+            elif protocol["method"] in MANIFOLD_PREFIX_METHODS:
                 metrics[f"{stage}/latent_mse_h1"] = (
                     output.latent_mse_by_horizon[0].detach()
                 )
@@ -1029,7 +1048,7 @@ def _successor_config(
         "base_export_run_name": base_export_run_name,
         "base_checkpoint_sha256": base_checkpoint_sha256,
     }
-    if protocol["method"] == MANIFOLD_PREFIX_METHOD:
+    if protocol["method"] in MANIFOLD_PREFIX_METHODS:
         for key in (
             "prefix_depth",
             "prefix_heads",
@@ -1481,7 +1500,9 @@ __all__ = [
     "DIRECT_MOMENT_METHODS",
     "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
+    "EMA_MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHOD",
+    "MANIFOLD_PREFIX_METHODS",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "MultiHorizonWindows",

@@ -158,3 +158,14 @@ while the prefix backbone becomes substantially stronger and the successor
 geometry becomes exact. Dense action-prefix latent prediction also overlaps
 the backbone idea studied by [Fast-LeWM](https://arxiv.org/abs/2606.26217), so
 that architecture alone is treated as a control rather than a novelty claim.
+
+## EMA manifold target variant
+
+`rf_ema_manifold_prefix_successor_wm` changes only the target gradient route
+of the manifold-prefix model. Future latents come from a stop-gradient EMA
+encoder (`decay = 0.995`), while the online encoder still learns through the
+history branch and SIGReg. The Transformer, optimizer, data, horizon, planner,
+and the single latent-sequence loss remain unchanged. This controlled test
+targets the observed failure mode in which online validation MSE improved but
+Cube planning regressed; the EMA encoder is training-only and is not exported
+for planning.

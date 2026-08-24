@@ -157,3 +157,58 @@ def test_s_only_training_uses_public_encoder_without_lewm_dynamics_loss():
     assert any(
         parameter.grad is not None for parameter in module.successor.parameters()
     )
+
+
+def test_ema_manifold_training_keeps_target_encoder_frozen():
+    torch.manual_seed(11)
+    world_model = swm.wm.LeWM(
+        encoder=TinyEncoder(embed_dim=4),
+        predictor=TinyPredictor(),
+        action_encoder=nn.Linear(2, 4),
+    )
+    protocol = load_rf_successor_training_protocol(
+        "configs/experiment/"
+        "rf_ema_manifold_prefix_successor_wm_cube_train.yaml"
+    )
+    protocol["sequence"].update(
+        history_frames=2,
+        rollout_horizon=2,
+        num_steps=5,
+    )
+    protocol["model"]["embed_dim"] = 4
+    protocol["successor"].update(
+        prefix_depth=1,
+        prefix_heads=2,
+        prefix_mlp_dim=12,
+        predictor_depth=1,
+        predictor_mlp_dim=16,
+        fusion_dim=12,
+        dropout=0.0,
+        max_horizon=2,
+    )
+    protocol["loss"]["sigreg"].update(knots=3, num_projections=4)
+    module = _build_training_module(
+        world_model,
+        protocol,
+        total_steps=2,
+        action_block_dim=2,
+        device_image_preprocessing=False,
+    )
+    module.log_dict = lambda *args, **kwargs: None
+    batch = {
+        "pixels": torch.randn(2, 5, 3, 8, 8),
+        "action": torch.randn(2, 5, 2),
+    }
+
+    loss = module._forward_loss(batch, "train")
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert module.use_ema_target is True
+    assert module.model.encoder.projection.weight.grad is not None
+    assert all(
+        parameter.grad is None for parameter in module.target_model.parameters()
+    )
+    assert any(
+        parameter.grad is not None for parameter in module.successor.parameters()
+    )
