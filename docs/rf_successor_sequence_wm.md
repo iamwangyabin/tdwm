@@ -194,3 +194,10 @@ trainable objective is the single all-horizon latent MSE. This isolates the
 useful question cleanly: can dense one-step-to-multi-step prediction improve
 planning while preserving the goal-distance geometry already learned by a
 strong reward-free LeWM?
+
+For a controlled residual test, the optional
+`lewm_direct_terminal_blend` query combines the frozen LeWM rollout and the
+direct prefix prediction at each horizon. Its coefficients must be fixed from
+held-out latent prediction error, never from task success or reward. A zero
+coefficient exactly recovers the pretrained LeWM prediction; a positive
+coefficient measures only the direct head's incremental predictive value.

@@ -40,6 +40,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
         clamp_successor_cost: bool = True,
         planning_query: str = "discounted_successor",
         terminal_query_weight: float = 0.5,
+        lewm_blend_weights: list[float] | tuple[float, ...] | None = None,
     ) -> None:
         super().__init__()
         if max_horizon <= 0:
@@ -53,6 +54,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
             "discounted_terminal_blend",
             "manifold_projected_successor",
             "terminal_moment",
+            "lewm_direct_terminal_blend",
         }:
             raise ValueError("Unsupported reward-free planning query.")
         if (
@@ -64,6 +66,18 @@ class RewardFreeSuccessorLeWM(nn.Module):
             0.0 < terminal_query_weight < 1.0
         ):
             raise ValueError("terminal_query_weight must lie strictly between 0 and 1.")
+        if planning_query == "lewm_direct_terminal_blend":
+            if not hasattr(successor, "predict_latents"):
+                raise ValueError("The LeWM blend requires a direct latent head.")
+            if lewm_blend_weights is None or len(lewm_blend_weights) != max_horizon:
+                raise ValueError("The LeWM blend requires one weight per horizon.")
+            blend_weights = torch.as_tensor(lewm_blend_weights, dtype=torch.float32)
+            if torch.any((blend_weights < 0.0) | (blend_weights > 1.0)):
+                raise ValueError("LeWM blend weights must lie in [0, 1].")
+        else:
+            if lewm_blend_weights is not None:
+                raise ValueError("LeWM blend weights require the matching query.")
+            blend_weights = torch.empty(0, dtype=torch.float32)
         self.world_model = world_model
         self.successor = successor
         self.max_horizon = int(max_horizon)
@@ -72,6 +86,9 @@ class RewardFreeSuccessorLeWM(nn.Module):
         self.clamp_successor_cost = bool(clamp_successor_cost)
         self.planning_query = planning_query
         self.terminal_query_weight = float(terminal_query_weight)
+        self.register_buffer(
+            "lewm_blend_weights", blend_weights, persistent=False
+        )
 
     @property
     def history_size(self) -> int:
@@ -120,7 +137,10 @@ class RewardFreeSuccessorLeWM(nn.Module):
             raise ValueError("Planning horizon exceeds successor training coverage.")
 
         future = None
-        if self.terminal_weight > 0.0:
+        if (
+            self.terminal_weight > 0.0
+            or self.planning_query == "lewm_direct_terminal_blend"
+        ):
             observed_frames = int(info_dict["pixels"].shape[2])
             rollout = self.world_model.rollout(
                 info_dict,
@@ -144,7 +164,13 @@ class RewardFreeSuccessorLeWM(nn.Module):
             history = self._encoded_history_for_samples(
                 info_dict, batch=batch, samples=samples
             )
-        if self.planning_query == "discounted_successor":
+        blended_future = None
+        if self.planning_query == "lewm_direct_terminal_blend":
+            direct_future = self.successor.predict_latents(history, action_candidates)
+            weights = self.lewm_blend_weights[:horizon].view(1, 1, horizon, 1)
+            blended_future = future + weights * (direct_future - future)
+            score_features = None
+        elif self.planning_query == "discounted_successor":
             score_features = self.successor(history, action_candidates)[..., -1, :]
         else:
             moments = self.successor.predict_moments(history, action_candidates)
@@ -169,7 +195,10 @@ class RewardFreeSuccessorLeWM(nn.Module):
                     gamma=self.successor.gamma,
                 )[..., -1, :]
         goal = self._goal_for_samples(info_dict, batch=batch, samples=samples)
-        successor_cost = successor_goal_cost(score_features, goal)
+        if blended_future is None:
+            successor_cost = successor_goal_cost(score_features, goal)
+        else:
+            successor_cost = latent_goal_cost(blended_future[..., -1, :], goal)
         if self.clamp_successor_cost:
             successor_cost = successor_cost.clamp_min(0.0)
         cost = self.successor_weight * successor_cost
@@ -413,6 +442,7 @@ def make_rf_successor_policy(
         terminal_query_weight=float(
             successor_config.get("terminal_query_weight", 0.5)
         ),
+        lewm_blend_weights=successor_config.get("lewm_blend_weights"),
     ).to(device)
     wrapped.eval()
     wrapped.requires_grad_(False)

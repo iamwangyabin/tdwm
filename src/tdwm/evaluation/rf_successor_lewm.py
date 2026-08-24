@@ -178,6 +178,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         "discounted_terminal_blend",
         "manifold_projected_successor",
         "terminal_moment",
+        "lewm_direct_terminal_blend",
     }:
         raise ValueError("Unsupported successor planning query.")
     if planning_query != "discounted_successor" and method not in SEQUENCE_METHODS:
@@ -192,6 +193,18 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError(
             "terminal_query_weight is only valid for the blended planning query."
         )
+    blend_weights = successor.get("lewm_blend_weights")
+    if planning_query == "lewm_direct_terminal_blend":
+        if method != FROZEN_MANIFOLD_PREFIX_METHOD:
+            raise ValueError("The LeWM latent blend is locked to the frozen method.")
+        if (
+            not isinstance(blend_weights, list)
+            or len(blend_weights) != int(successor["max_horizon"])
+            or any(not 0.0 <= float(weight) <= 1.0 for weight in blend_weights)
+        ):
+            raise ValueError("The LeWM blend requires one valid weight per horizon.")
+    elif blend_weights is not None:
+        raise ValueError("lewm_blend_weights requires the matching planning query.")
 
     planning = protocol.get("planning", {})
     missing = REQUIRED_PLANNING_KEYS - planning.keys()

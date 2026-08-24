@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import torch
+from torch import nn
 
-from tdwm.adapters.rf_successor_lewm import load_rf_successor_checkpoint
+from tdwm.adapters.rf_successor_lewm import (
+    RewardFreeSuccessorLeWM,
+    load_rf_successor_checkpoint,
+)
 from tdwm.evaluation.rf_successor_lewm import (
     load_rf_successor_evaluation_protocol,
+    validate_rf_successor_evaluation_protocol,
 )
 from tdwm.methods.rf_successor_lewm import ManifoldTransformerMomentHead
 from tdwm.training.rf_successor_lewm import (
@@ -14,6 +19,33 @@ from tdwm.training.rf_successor_lewm import (
 
 
 SOURCE_HASH = "0ce38860a672c4a304d6921c6f07158977bb1d2c8f0eed8a002bb7c89502b579"
+
+
+class _BlendWorld(nn.Module):
+    def __init__(self, baseline_future: torch.Tensor) -> None:
+        super().__init__()
+        self.register_buffer("baseline_future", baseline_future)
+
+    def rollout(self, info, action_sequence, history_size=None):
+        del history_size
+        batch, samples, horizon = action_sequence.shape[:3]
+        history = info["emb"].expand(batch, samples, -1, -1)
+        future = self.baseline_future[:, :samples, :horizon]
+        return {"predicted_emb": torch.cat((history, future), dim=-2)}
+
+
+class _DirectLatentHead(nn.Module):
+    history_size = 1
+    embed_dim = 2
+    action_dim = 1
+    gamma = 0.95
+
+    def predict_latents(self, history, actions):
+        del history
+        return torch.cat((actions, torch.zeros_like(actions)), dim=-1)
+
+    def predict_moments(self, history, actions):
+        return self.predict_latents(history, actions)
 
 
 def _small_head() -> ManifoldTransformerMomentHead:
@@ -70,6 +102,57 @@ def test_frozen_terminal_protocol_changes_only_the_goal_query():
     for key in ("id", "display_name", "inference_objective", "provenance"):
         terminal[key] = standard[key]
     assert terminal == standard
+
+
+def test_reward_free_validation_coefficients_enable_lewm_residual_query():
+    protocol = load_rf_successor_evaluation_protocol(
+        "configs/experiment/"
+        "rf_frozen_manifold_prefix_successor_wm_cube_terminal_o50.yaml"
+    )
+    protocol["successor"]["planning_query"] = "lewm_direct_terminal_blend"
+    protocol["successor"]["lewm_blend_weights"] = [
+        0.04,
+        0.05,
+        0.06,
+        0.07,
+        0.09,
+    ]
+
+    validate_rf_successor_evaluation_protocol(protocol)
+
+
+def test_lewm_residual_query_recovers_each_endpoint_at_zero_and_one():
+    baseline = torch.tensor(
+        [[[[1.0, 0.0], [2.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]]]]
+    )
+    actions = torch.tensor([[[[1.0], [4.0]], [[1.0], [2.0]]]])
+    info = {
+        "pixels": torch.zeros(1, 1, 1),
+        "emb": torch.zeros(1, 1, 1, 2),
+        "goal_emb": torch.tensor([[2.0, 0.0]]),
+    }
+
+    baseline_query = RewardFreeSuccessorLeWM(
+        _BlendWorld(baseline),
+        _DirectLatentHead(),
+        max_horizon=2,
+        planning_query="lewm_direct_terminal_blend",
+        lewm_blend_weights=[0.0, 0.0],
+    )
+    direct_query = RewardFreeSuccessorLeWM(
+        _BlendWorld(baseline),
+        _DirectLatentHead(),
+        max_horizon=2,
+        planning_query="lewm_direct_terminal_blend",
+        lewm_blend_weights=[1.0, 1.0],
+    )
+
+    assert torch.allclose(
+        baseline_query.get_cost(dict(info), actions), torch.tensor([[0.0, 2.0]])
+    )
+    assert torch.allclose(
+        direct_query.get_cost(dict(info), actions), torch.tensor([[2.0, 0.0]])
+    )
 
 
 def test_frozen_checkpoint_round_trip(tmp_path):
