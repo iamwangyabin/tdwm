@@ -201,3 +201,31 @@ direct prefix prediction at each horizon. Its coefficients must be fixed from
 held-out latent prediction error, never from task success or reward. A zero
 coefficient exactly recovers the pretrained LeWM prediction; a positive
 coefficient measures only the direct head's incremental predictive value.
+
+## Frozen LeWM residual variant
+
+`rf_frozen_residual_prefix_wm` keeps the same audited pretrained LeWM frozen,
+but no longer asks a second network to replace its rollout. For a candidate
+action prefix, frozen LeWM first produces
+
+\[
+z^{\rm base}_{t+1:t+K}=F_{\rm LeWM}(z_{t-H+1:t},a_{t:t+K-1}).
+\]
+
+A causal Transformer predicts only a correction for every horizon,
+
+\[
+\hat z_{t+h}=z^{\rm base}_{t+h}
+  +\Delta_\psi(z_{t-H+1:t},a_{t:t+h-1},z^{\rm base}_{t+h}),
+\qquad
+\mathcal L=\frac1K\sum_{h=1}^{K}
+\|\hat z_{t+h}-z_{t+h}\|_2^2.
+\]
+
+The correction readout is initialized to exactly zero. Before any training,
+the method therefore gives exactly the pretrained LeWM rollout and terminal
+planning cost, rather than a randomly initialized alternative model. The
+encoder, LeWM predictor, goal geometry, reward-free data, and CEM protocol all
+remain fixed; only the one all-horizon residual MSE is optimized. Lifted
+moments and finite-horizon successor sequences are still deterministic
+functions of the corrected latents, not additional learned losses.

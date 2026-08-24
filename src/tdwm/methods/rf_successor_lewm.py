@@ -454,11 +454,11 @@ class ManifoldTransformerMomentHead(nn.Module):
         actions = action_prefix.reshape(flat_batch, action_prefix.shape[-2], -1)
         return leading, anchor, actions
 
-    def predict_latents(
+    def _prefix_features(
         self,
         latent_history: torch.Tensor,
         action_prefix: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[tuple[int, ...], torch.Tensor, torch.Tensor]:
         leading, anchor, actions = self._flatten_inputs(
             latent_history, action_prefix
         )
@@ -478,6 +478,16 @@ class ManifoldTransformerMomentHead(nn.Module):
             diagonal=1,
         )
         prefixes = self.prefix_encoder(tokens, mask=causal_mask)[:, 1:]
+        return leading, anchor, prefixes
+
+    def predict_latents(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+    ) -> torch.Tensor:
+        leading, anchor, prefixes = self._prefix_features(
+            latent_history, action_prefix
+        )
 
         anchored = anchor.unsqueeze(1).expand_as(prefixes)
         fused = torch.cat((anchored, prefixes, anchored * prefixes), dim=-1)
@@ -506,6 +516,106 @@ class ManifoldTransformerMomentHead(nn.Module):
         action_prefix: torch.Tensor,
     ) -> torch.Tensor:
         moments = self.predict_moments(latent_history, action_prefix)
+        return finite_horizon_successor_from_moments(moments, gamma=self.gamma)
+
+
+class LeWMResidualTransformerHead(ManifoldTransformerMomentHead):
+    """Correct a frozen LeWM rollout without replacing its latent geometry."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        del self.fusion
+        self.base_fusion = nn.Sequential(
+            nn.LayerNorm(5 * self.embed_dim),
+            nn.Linear(5 * self.embed_dim, self.fusion_dim),
+            nn.GELU(),
+            nn.Linear(self.fusion_dim, self.embed_dim),
+        )
+        self.correction_out = nn.Linear(self.embed_dim, self.embed_dim)
+        nn.init.zeros_(self.correction_out.weight)
+        nn.init.zeros_(self.correction_out.bias)
+
+    def _validate_base_future(
+        self,
+        base_future: torch.Tensor,
+        *,
+        leading: tuple[int, ...],
+        horizon: int,
+    ) -> torch.Tensor:
+        expected = (*leading, horizon, self.embed_dim)
+        if base_future.shape != expected:
+            raise ValueError(f"base_future must have shape {expected}.")
+        flat_batch = math.prod(leading) if leading else 1
+        return base_future.reshape(flat_batch, horizon, self.embed_dim)
+
+    def predict_correction(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+        base_future: torch.Tensor,
+    ) -> torch.Tensor:
+        leading, anchor, prefixes = self._prefix_features(
+            latent_history, action_prefix
+        )
+        base = self._validate_base_future(
+            base_future,
+            leading=leading,
+            horizon=action_prefix.shape[-2],
+        )
+        anchored = anchor.unsqueeze(1).expand_as(prefixes)
+        fused = torch.cat(
+            (
+                anchored,
+                prefixes,
+                base,
+                base - anchored,
+                base * prefixes,
+            ),
+            dim=-1,
+        )
+        state = self.base_fusion(fused)
+        for block in self.predictor:
+            state = block(state, prefixes)
+        correction = self.correction_out(self.output_norm(state))
+        return correction.reshape(
+            *leading,
+            action_prefix.shape[-2],
+            self.embed_dim,
+        )
+
+    def predict_latents(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+        base_future: torch.Tensor,
+    ) -> torch.Tensor:
+        return base_future + self.predict_correction(
+            latent_history,
+            action_prefix,
+            base_future,
+        )
+
+    def predict_moments(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+        base_future: torch.Tensor,
+    ) -> torch.Tensor:
+        return successor_feature_basis(
+            self.predict_latents(latent_history, action_prefix, base_future)
+        )
+
+    def forward(
+        self,
+        latent_history: torch.Tensor,
+        action_prefix: torch.Tensor,
+        base_future: torch.Tensor,
+    ) -> torch.Tensor:
+        moments = self.predict_moments(
+            latent_history,
+            action_prefix,
+            base_future,
+        )
         return finite_horizon_successor_from_moments(moments, gamma=self.gamma)
 
 
@@ -566,6 +676,15 @@ class ManifoldSequenceOutput:
     latent_mse_by_horizon: torch.Tensor
     successor_mse_by_horizon: torch.Tensor
     recovered_latent_mse_by_horizon: torch.Tensor
+
+
+@dataclass(frozen=True)
+class ResidualManifoldSequenceOutput(ManifoldSequenceOutput):
+    """Frozen LeWM rollout plus one learned all-horizon residual."""
+
+    base_future: torch.Tensor
+    correction: torch.Tensor
+    base_latent_mse_by_horizon: torch.Tensor
 
 
 def _mse_by_horizon(error: torch.Tensor) -> torch.Tensor:
@@ -742,13 +861,74 @@ def manifold_sequence_objective(
     )
 
 
+def residual_manifold_sequence_objective(
+    head: LeWMResidualTransformerHead,
+    latent_history: torch.Tensor,
+    action_prefix: torch.Tensor,
+    base_future: torch.Tensor,
+    target_future: torch.Tensor,
+    *,
+    gamma: float,
+) -> ResidualManifoldSequenceOutput:
+    """Learn only the correction to a frozen LeWM multi-step rollout."""
+
+    if base_future.shape != target_future.shape:
+        raise ValueError("base_future and target_future must match.")
+    if target_future.shape[:-2] != latent_history.shape[:-2]:
+        raise ValueError("future and history leading shapes must match.")
+    if target_future.shape[-2] != action_prefix.shape[-2]:
+        raise ValueError("future and action-prefix horizons must match.")
+    if target_future.shape[-1] != head.embed_dim:
+        raise ValueError("future latents and the residual head must share a dimension.")
+    if not math.isclose(float(gamma), head.gamma):
+        raise ValueError("The objective gamma differs from the head gamma.")
+
+    detached_base = base_future.detach()
+    detached_target = target_future.detach()
+    correction = head.predict_correction(
+        latent_history.detach(),
+        action_prefix,
+        detached_base,
+    )
+    predicted_future = detached_base + correction
+    moments = successor_feature_basis(predicted_future)
+    target_moments = successor_feature_basis(detached_target)
+    prediction = finite_horizon_successor_from_moments(moments, gamma=gamma)
+    target = finite_horizon_successor_from_moments(target_moments, gamma=gamma)
+    recovered_future = latent_sequence_from_successor(prediction, gamma=gamma)
+    return ResidualManifoldSequenceOutput(
+        predicted_future=predicted_future,
+        target_future=detached_target,
+        moments=moments,
+        target_moments=target_moments,
+        prediction=prediction,
+        target=target,
+        recovered_future=recovered_future,
+        latent_loss=(predicted_future - detached_target).square().mean(),
+        latent_mse_by_horizon=_mse_by_horizon(
+            predicted_future - detached_target
+        ),
+        successor_mse_by_horizon=_mse_by_horizon(prediction - target),
+        recovered_latent_mse_by_horizon=_mse_by_horizon(
+            recovered_future - detached_target
+        ),
+        base_future=detached_base,
+        correction=correction,
+        base_latent_mse_by_horizon=_mse_by_horizon(
+            detached_base - detached_target
+        ),
+    )
+
+
 __all__ = [
     "ActionPrefixMomentHead",
     "ActionPrefixSuccessorHead",
     "ManifoldSequenceOutput",
     "ManifoldTransformerMomentHead",
+    "LeWMResidualTransformerHead",
     "MultiHorizonSuccessorOutput",
     "MomentSequenceOutput",
+    "ResidualManifoldSequenceOutput",
     "SuccessorSequenceOutput",
     "balanced_successor_mse",
     "discounted_prefix_mass",
@@ -758,6 +938,7 @@ __all__ = [
     "manifold_sequence_objective",
     "multi_horizon_successor_objective",
     "moment_sequence_objective",
+    "residual_manifold_sequence_objective",
     "successor_moments_from_sequence",
     "successor_recurrence_residual",
     "successor_sequence_objective",

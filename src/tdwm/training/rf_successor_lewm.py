@@ -21,10 +21,12 @@ from tdwm.adapters import prepare_cloud_runtime
 from tdwm.methods.rf_successor_lewm import (
     ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
+    LeWMResidualTransformerHead,
     ManifoldTransformerMomentHead,
     manifold_sequence_objective,
     moment_sequence_objective,
     multi_horizon_successor_objective,
+    residual_manifold_sequence_objective,
     successor_sequence_objective,
 )
 from tdwm.training.block_sampler import BlockShuffleBatchSampler
@@ -56,12 +58,17 @@ E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
 MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
 FROZEN_MANIFOLD_PREFIX_METHOD = "rf_frozen_manifold_prefix_successor_wm"
+FROZEN_RESIDUAL_PREFIX_METHOD = "rf_frozen_residual_prefix_wm"
+FROZEN_PRETRAINED_METHODS = frozenset(
+    (FROZEN_MANIFOLD_PREFIX_METHOD, FROZEN_RESIDUAL_PREFIX_METHOD)
+)
 DIRECT_MOMENT_METHODS = frozenset((DIRECT_MOMENT_METHOD, E2E_MOMENT_METHOD))
 MANIFOLD_PREFIX_METHODS = frozenset(
     (
         MANIFOLD_PREFIX_METHOD,
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
+        FROZEN_RESIDUAL_PREFIX_METHOD,
     )
 )
 SEQUENCE_METHODS = frozenset(
@@ -74,6 +81,7 @@ SEQUENCE_METHODS = frozenset(
         MANIFOLD_PREFIX_METHOD,
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
+        FROZEN_RESIDUAL_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -97,7 +105,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     freeze_from_start = training.get("freeze_world_model_from_start", False)
     if not isinstance(freeze_from_start, bool):
         raise TypeError("training.freeze_world_model_from_start must be boolean.")
-    if method == FROZEN_MANIFOLD_PREFIX_METHOD:
+    if method in FROZEN_PRETRAINED_METHODS:
         expected_initialization = "frozen_pretrained_lewm"
     elif freeze_after_epoch is not None:
         expected_initialization = "resume_same_objective_checkpoint"
@@ -107,14 +115,14 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError(
             "RF-Successor-LeWM initialization differs from its training stage."
         )
-    if freeze_from_start != (method == FROZEN_MANIFOLD_PREFIX_METHOD):
+    if freeze_from_start != (method in FROZEN_PRETRAINED_METHODS):
         raise ValueError(
-            "Only the frozen-pretrained method freezes the world model from start."
+            "Only frozen-pretrained methods freeze the world model from start."
         )
     if freeze_after_epoch is not None and method != MANIFOLD_PREFIX_METHOD:
         raise ValueError("Head-only refinement is locked to the online manifold model.")
     pretrained = protocol.get("pretrained_world_model")
-    if method == FROZEN_MANIFOLD_PREFIX_METHOD:
+    if method in FROZEN_PRETRAINED_METHODS:
         if not isinstance(pretrained, dict):
             raise ValueError("The frozen method requires pretrained_world_model metadata.")
         if (
@@ -128,7 +136,9 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         if int(pretrained.get("source_epoch", 0)) <= 0:
             raise ValueError("The pretrained LeWM source epoch is invalid.")
     elif pretrained is not None:
-        raise ValueError("Only the frozen method accepts pretrained_world_model metadata.")
+        raise ValueError(
+            "Only frozen-pretrained methods accept pretrained_world_model metadata."
+        )
     if protocol.get("runtime", {}).get("stable_worldmodel_version") != "0.1.1":
         raise ValueError("RF-Successor-LeWM requires stable-worldmodel 0.1.1.")
 
@@ -170,7 +180,20 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         if float(objective.get("successor_weight", 0.0)) <= 0.0:
             raise ValueError("The direct successor supervision must remain active.")
     else:
-        if method in MANIFOLD_PREFIX_METHODS:
+        if method == FROZEN_RESIDUAL_PREFIX_METHOD:
+            expected = {
+                "primitive_prediction": "lewm_residual_future_latent_sequence",
+                "single_step": "horizon_one_residual_corrected_latent",
+                "multi_step_prediction": "all_horizon_residual_corrected_latents",
+                "consistency": "exact_base_plus_residual_successor_cumsum",
+                "target_encoder": "frozen_pretrained",
+                "base_predictor": "frozen_pretrained_lewm_rollout",
+                "goal_conditioning": "none",
+                "policy": "none",
+                "bootstrap": "none",
+            }
+            predictive_weight_key = "latent_sequence_weight"
+        elif method in MANIFOLD_PREFIX_METHODS:
             expected = {
                 "primitive_prediction": "future_latent_sequence",
                 "single_step": "horizon_one_latent",
@@ -181,7 +204,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
                     if method == EMA_MANIFOLD_PREFIX_METHOD
                     else (
                         "frozen_pretrained"
-                        if method == FROZEN_MANIFOLD_PREFIX_METHOD
+                        if method in FROZEN_PRETRAINED_METHODS
                         else "online_end_to_end"
                     )
                 ),
@@ -240,6 +263,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             MANIFOLD_PREFIX_METHOD: 7,
             EMA_MANIFOLD_PREFIX_METHOD: 8,
             FROZEN_MANIFOLD_PREFIX_METHOD: 9,
+            FROZEN_RESIDUAL_PREFIX_METHOD: 10,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -251,6 +275,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             FROZEN_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+            FROZEN_RESIDUAL_PREFIX_METHOD: "causal_transformer_lewm_residual",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -264,6 +289,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
             EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
             FROZEN_MANIFOLD_PREFIX_METHOD: "frozen_pretrained_latents",
+            FROZEN_RESIDUAL_PREFIX_METHOD: "frozen_pretrained_residual_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -271,11 +297,14 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         "td_bootstrap": False,
     }
     if method in SEQUENCE_METHODS:
-        locked["latent_recovery"] = (
-            "direct_manifold_latents"
-            if method in MANIFOLD_PREFIX_METHODS
-            else "exact_adjacent_successor_difference"
-        )
+        if method == FROZEN_RESIDUAL_PREFIX_METHOD:
+            locked["latent_recovery"] = "base_plus_residual_manifold_latents"
+        else:
+            locked["latent_recovery"] = (
+                "direct_manifold_latents"
+                if method in MANIFOLD_PREFIX_METHODS
+                else "exact_adjacent_successor_difference"
+            )
     if method in {
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
@@ -303,6 +332,10 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError("model.embed_dim must be divisible by prefix_heads.")
         if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
             raise ValueError("successor.dropout must lie in [0, 1).")
+        if method in FROZEN_PRETRAINED_METHODS and successor.get(
+            "pretrained_world_model_sha256"
+        ) != protocol["pretrained_world_model"]["checkpoint_sha256"]:
+            raise ValueError("The frozen LeWM source hashes must match.")
     elif int(successor.get("hidden_dim", 0)) <= 0:
         raise ValueError("successor.hidden_dim must be positive.")
     gamma = float(successor.get("gamma", -1.0))
@@ -828,7 +861,18 @@ def _build_successor_sequence_training_module(
                 "history_size": int(protocol["sequence"]["history_frames"]),
                 "gamma": float(successor["gamma"]),
             }
-            if protocol["method"] in MANIFOLD_PREFIX_METHODS:
+            if protocol["method"] == FROZEN_RESIDUAL_PREFIX_METHOD:
+                self.successor = LeWMResidualTransformerHead(
+                    **head_dimensions,
+                    prefix_depth=int(successor["prefix_depth"]),
+                    prefix_heads=int(successor["prefix_heads"]),
+                    prefix_mlp_dim=int(successor["prefix_mlp_dim"]),
+                    predictor_depth=int(successor["predictor_depth"]),
+                    predictor_mlp_dim=int(successor["predictor_mlp_dim"]),
+                    fusion_dim=int(successor["fusion_dim"]),
+                    dropout=float(successor["dropout"]),
+                )
+            elif protocol["method"] in MANIFOLD_PREFIX_METHODS:
                 self.successor = ManifoldTransformerMomentHead(
                     **head_dimensions,
                     prefix_depth=int(successor["prefix_depth"]),
@@ -918,7 +962,34 @@ def _build_successor_sequence_training_module(
             vector_reduction = protocol["successor"].get(
                 "feature_group_reduction", "coordinate_mean"
             )
-            if protocol["method"] in MANIFOLD_PREFIX_METHODS:
+            if protocol["method"] == FROZEN_RESIDUAL_PREFIX_METHOD:
+                with torch.no_grad():
+                    rollout = rollout_from_latents(
+                        self.model,
+                        windows.history,
+                        windows.rollout_actions,
+                        history_size=self.history_size,
+                    )
+                    if rollout.shape[-2] < self.history_size + self.horizon:
+                        raise RuntimeError(
+                            "Frozen LeWM rollout did not cover the training horizon."
+                        )
+                    base_future = rollout[
+                        ...,
+                        self.history_size : self.history_size + self.horizon,
+                        :,
+                    ]
+                output = residual_manifold_sequence_objective(
+                    self.successor,
+                    windows.history,
+                    windows.action_prefix,
+                    base_future,
+                    windows.target_future,
+                    gamma=self.gamma,
+                )
+                predictive_loss = output.latent_loss
+                predictive_metric = "latent_sequence_loss"
+            elif protocol["method"] in MANIFOLD_PREFIX_METHODS:
                 output = manifold_sequence_objective(
                     self.successor,
                     windows.history,
@@ -1006,6 +1077,16 @@ def _build_successor_sequence_training_module(
                 metrics[f"{stage}/latent_mse_hK"] = (
                     output.latent_mse_by_horizon[-1].detach()
                 )
+                if protocol["method"] == FROZEN_RESIDUAL_PREFIX_METHOD:
+                    metrics[f"{stage}/base_latent_mse_h1"] = (
+                        output.base_latent_mse_by_horizon[0].detach()
+                    )
+                    metrics[f"{stage}/base_latent_mse_hK"] = (
+                        output.base_latent_mse_by_horizon[-1].detach()
+                    )
+                    metrics[f"{stage}/correction_rms"] = (
+                        output.correction.square().mean().sqrt().detach()
+                    )
             if episode_ids is not None:
                 metrics[f"{stage}/unique_episodes_per_batch"] = loss.new_tensor(
                     float(torch.unique(episode_ids).numel())
@@ -1188,7 +1269,7 @@ def _successor_config(
         config["feature_group_reduction"] = successor[
             "feature_group_reduction"
         ]
-    if protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD:
+    if protocol["method"] in FROZEN_PRETRAINED_METHODS:
         config["pretrained_world_model_sha256"] = protocol[
             "pretrained_world_model"
         ]["checkpoint_sha256"]
@@ -1310,7 +1391,7 @@ def train_rf_successor_lewm(
         and resume != "required"
     ):
         raise ValueError("Head-only refinement requires an explicit checkpoint resume.")
-    frozen_pretrained = protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD
+    frozen_pretrained = protocol["method"] in FROZEN_PRETRAINED_METHODS
     if frozen_pretrained != (initial_world_model_checkpoint_path is not None):
         raise ValueError(
             "The frozen-pretrained method alone requires an initial LeWM checkpoint."
@@ -1674,6 +1755,8 @@ __all__ = [
     "EMA_BALANCED_SEQUENCE_METHOD",
     "EMA_MANIFOLD_PREFIX_METHOD",
     "FROZEN_MANIFOLD_PREFIX_METHOD",
+    "FROZEN_PRETRAINED_METHODS",
+    "FROZEN_RESIDUAL_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHODS",
     "SEQUENCE_METHODS",

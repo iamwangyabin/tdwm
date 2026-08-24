@@ -39,11 +39,16 @@ E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
 MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
 FROZEN_MANIFOLD_PREFIX_METHOD = "rf_frozen_manifold_prefix_successor_wm"
+FROZEN_RESIDUAL_PREFIX_METHOD = "rf_frozen_residual_prefix_wm"
+FROZEN_PRETRAINED_METHODS = frozenset(
+    (FROZEN_MANIFOLD_PREFIX_METHOD, FROZEN_RESIDUAL_PREFIX_METHOD)
+)
 MANIFOLD_PREFIX_METHODS = frozenset(
     (
         MANIFOLD_PREFIX_METHOD,
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
+        FROZEN_RESIDUAL_PREFIX_METHOD,
     )
 )
 SEQUENCE_METHODS = frozenset(
@@ -56,6 +61,7 @@ SEQUENCE_METHODS = frozenset(
         MANIFOLD_PREFIX_METHOD,
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
+        FROZEN_RESIDUAL_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -89,6 +95,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             MANIFOLD_PREFIX_METHOD: 7,
             EMA_MANIFOLD_PREFIX_METHOD: 8,
             FROZEN_MANIFOLD_PREFIX_METHOD: 9,
+            FROZEN_RESIDUAL_PREFIX_METHOD: 10,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -100,6 +107,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             FROZEN_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+            FROZEN_RESIDUAL_PREFIX_METHOD: "causal_transformer_lewm_residual",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -113,6 +121,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
             EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
             FROZEN_MANIFOLD_PREFIX_METHOD: "frozen_pretrained_latents",
+            FROZEN_RESIDUAL_PREFIX_METHOD: "frozen_pretrained_residual_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -120,11 +129,14 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         "td_bootstrap": False,
     }
     if method in SEQUENCE_METHODS:
-        expected["latent_recovery"] = (
-            "direct_manifold_latents"
-            if method in MANIFOLD_PREFIX_METHODS
-            else "exact_adjacent_successor_difference"
-        )
+        if method == FROZEN_RESIDUAL_PREFIX_METHOD:
+            expected["latent_recovery"] = "base_plus_residual_manifold_latents"
+        else:
+            expected["latent_recovery"] = (
+                "direct_manifold_latents"
+                if method in MANIFOLD_PREFIX_METHODS
+                else "exact_adjacent_successor_difference"
+            )
     if method in {
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
@@ -155,7 +167,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
             raise ValueError("successor.dropout must lie in [0, 1).")
         source_hash = successor.get("pretrained_world_model_sha256")
-        if method == FROZEN_MANIFOLD_PREFIX_METHOD:
+        if method in FROZEN_PRETRAINED_METHODS:
             if not isinstance(source_hash, str) or len(source_hash) != 64:
                 raise ValueError("The frozen LeWM source hash is invalid.")
         elif source_hash is not None:
@@ -179,6 +191,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         "manifold_projected_successor",
         "terminal_moment",
         "lewm_direct_terminal_blend",
+        "lewm_residual_terminal",
     }:
         raise ValueError("Unsupported successor planning query.")
     if planning_query != "discounted_successor" and method not in SEQUENCE_METHODS:
@@ -205,6 +218,12 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError("The LeWM blend requires one valid weight per horizon.")
     elif blend_weights is not None:
         raise ValueError("lewm_blend_weights requires the matching planning query.")
+    if (method == FROZEN_RESIDUAL_PREFIX_METHOD) != (
+        planning_query == "lewm_residual_terminal"
+    ):
+        raise ValueError(
+            "The residual method and residual planning query must be used together."
+        )
 
     planning = protocol.get("planning", {})
     missing = REQUIRED_PLANNING_KEYS - planning.keys()
@@ -277,7 +296,7 @@ def _validate_successor_config(
     for key in ("latent_recovery", "feature_group_reduction"):
         if key in successor:
             expected[key] = successor[key]
-    if protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD:
+    if protocol["method"] in FROZEN_PRETRAINED_METHODS:
         expected["pretrained_world_model_sha256"] = successor[
             "pretrained_world_model_sha256"
         ]
@@ -384,7 +403,7 @@ def evaluate_rf_successor_lewm(
     )
     if payload.get("method") != protocol["method"]:
         raise ValueError("The deployment checkpoint method differs from protocol.")
-    if protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD:
+    if protocol["method"] in FROZEN_PRETRAINED_METHODS:
         initialization = payload.get("initialization", {})
         if (
             initialization.get("strategy") != "frozen_pretrained_lewm"
@@ -564,6 +583,8 @@ __all__ = [
     "EMA_BALANCED_SEQUENCE_METHOD",
     "EMA_MANIFOLD_PREFIX_METHOD",
     "FROZEN_MANIFOLD_PREFIX_METHOD",
+    "FROZEN_PRETRAINED_METHODS",
+    "FROZEN_RESIDUAL_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHODS",
     "SEQUENCE_METHODS",

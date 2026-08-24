@@ -1,0 +1,64 @@
+schema_version: 1
+id: rf_frozen_residual_prefix_wm
+display_name: Frozen-LeWM Residual Prefix World Model
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  encoder_container: swm.wm.LeWM
+  residual_head: tdwm.methods.rf_successor_lewm.LeWMResidualTransformerHead
+  adapter: tdwm.adapters.rf_successor_lewm.RewardFreeSuccessorLeWM
+
+input:
+  history: current_latent_observation
+  action: externally_supplied_candidate_prefix
+  base_future: frozen_pretrained_lewm_rollout
+  goal_during_training: false
+  reward_during_training: false
+
+model:
+  representation:
+    source: audited_pretrained_lewm
+    trainable: false
+  base_prediction:
+    type: autoregressive_lewm_future_latents
+    trainable: false
+  residual_prediction:
+    type: causal_action_prefix_future_latent_correction
+    output: every_future_correction_from_1_to_K
+    zero_initialized: true
+  corrected_future:
+    construction: frozen_lewm_base_plus_learned_residual
+  successor:
+    construction: exact_lift_then_normalized_discounted_cumsum
+    feature_basis: augmented_latent_squared_distance
+  action_policy:
+    present: false
+
+target:
+  type: frozen_pretrained_lewm_observation_latents
+  horizons: all_prefixes_1_to_K
+  td_bootstrap: false
+
+loss:
+  - all_horizon_corrected_latent_sequence_mse
+
+inference:
+  goal_query: corrected_terminal_latent_squared_distance
+  action_selection: stable_worldmodel_cem_mpc
+  learned_policy: false
+
+invariants:
+  zero_residual_exactly_recovers_pretrained_lewm: true
+  encoder_and_base_predictor_frozen: true
+  reward_free_training: true
+
+scope:
+  supported_zero_shot_query: squared_distance_to_any_encoded_goal
+  arbitrary_reward_zero_shot_rl: false
+
+provenance:
+  base_method: configs/methods/rf_frozen_manifold_prefix_successor_wm.yaml
+  note: The new head refines rather than replaces the audited LeWM rollout, preserving its planning geometry at initialization.

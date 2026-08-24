@@ -12,6 +12,7 @@ from torch import nn
 from tdwm.methods.rf_successor_lewm import (
     ActionPrefixMomentHead,
     ActionPrefixSuccessorHead,
+    LeWMResidualTransformerHead,
     ManifoldTransformerMomentHead,
     finite_horizon_successor_from_moments,
 )
@@ -32,6 +33,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
             ActionPrefixSuccessorHead
             | ActionPrefixMomentHead
             | ManifoldTransformerMomentHead
+            | LeWMResidualTransformerHead
         ),
         *,
         max_horizon: int,
@@ -55,6 +57,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
             "manifold_projected_successor",
             "terminal_moment",
             "lewm_direct_terminal_blend",
+            "lewm_residual_terminal",
         }:
             raise ValueError("Unsupported reward-free planning query.")
         if (
@@ -78,6 +81,12 @@ class RewardFreeSuccessorLeWM(nn.Module):
             if lewm_blend_weights is not None:
                 raise ValueError("LeWM blend weights require the matching query.")
             blend_weights = torch.empty(0, dtype=torch.float32)
+        if isinstance(successor, LeWMResidualTransformerHead) != (
+            planning_query == "lewm_residual_terminal"
+        ):
+            raise ValueError(
+                "The residual head and residual planning query must be used together."
+            )
         self.world_model = world_model
         self.successor = successor
         self.max_horizon = int(max_horizon)
@@ -139,7 +148,8 @@ class RewardFreeSuccessorLeWM(nn.Module):
         future = None
         if (
             self.terminal_weight > 0.0
-            or self.planning_query == "lewm_direct_terminal_blend"
+            or self.planning_query
+            in {"lewm_direct_terminal_blend", "lewm_residual_terminal"}
         ):
             observed_frames = int(info_dict["pixels"].shape[2])
             rollout = self.world_model.rollout(
@@ -164,11 +174,18 @@ class RewardFreeSuccessorLeWM(nn.Module):
             history = self._encoded_history_for_samples(
                 info_dict, batch=batch, samples=samples
             )
-        blended_future = None
+        queried_future = None
         if self.planning_query == "lewm_direct_terminal_blend":
             direct_future = self.successor.predict_latents(history, action_candidates)
             weights = self.lewm_blend_weights[:horizon].view(1, 1, horizon, 1)
-            blended_future = future + weights * (direct_future - future)
+            queried_future = future + weights * (direct_future - future)
+            score_features = None
+        elif self.planning_query == "lewm_residual_terminal":
+            queried_future = self.successor.predict_latents(
+                history,
+                action_candidates,
+                future,
+            )
             score_features = None
         elif self.planning_query == "discounted_successor":
             score_features = self.successor(history, action_candidates)[..., -1, :]
@@ -195,10 +212,10 @@ class RewardFreeSuccessorLeWM(nn.Module):
                     gamma=self.successor.gamma,
                 )[..., -1, :]
         goal = self._goal_for_samples(info_dict, batch=batch, samples=samples)
-        if blended_future is None:
+        if queried_future is None:
             successor_cost = successor_goal_cost(score_features, goal)
         else:
-            successor_cost = latent_goal_cost(blended_future[..., -1, :], goal)
+            successor_cost = latent_goal_cost(queried_future[..., -1, :], goal)
         if self.clamp_successor_cost:
             successor_cost = successor_cost.clamp_min(0.0)
         cost = self.successor_weight * successor_cost
@@ -285,7 +302,8 @@ def load_rf_successor_checkpoint(
 ) -> tuple[
     ActionPrefixSuccessorHead
     | ActionPrefixMomentHead
-    | ManifoldTransformerMomentHead,
+    | ManifoldTransformerMomentHead
+    | LeWMResidualTransformerHead,
     dict[str, Any],
     dict[str, Any],
 ]:
@@ -307,10 +325,11 @@ def load_rf_successor_checkpoint(
         "rf_manifold_prefix_successor_wm",
         "rf_ema_manifold_prefix_successor_wm",
         "rf_frozen_manifold_prefix_successor_wm",
+        "rf_frozen_residual_prefix_wm",
     }:
         raise ValueError("The checkpoint is not a supported reward-free successor model.")
     objective_version = payload.get("objective_version")
-    if objective_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+    if objective_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
         raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
@@ -326,7 +345,28 @@ def load_rf_successor_checkpoint(
         "action_dim": int(config["action_dim"]),
         "history_size": int(config["history_size"]),
     }
-    if method in {
+    if method == "rf_frozen_residual_prefix_wm":
+        if objective_version != 10 or config.get(
+            "architecture"
+        ) != "causal_transformer_lewm_residual":
+            raise ValueError(
+                "The residual checkpoint version or architecture differs."
+            )
+        source_hash = config.get("pretrained_world_model_sha256")
+        if not isinstance(source_hash, str) or len(source_hash) != 64:
+            raise ValueError("The residual checkpoint source hash is invalid.")
+        head = LeWMResidualTransformerHead(
+            **head_kwargs,
+            gamma=float(config["gamma"]),
+            prefix_depth=int(config["prefix_depth"]),
+            prefix_heads=int(config["prefix_heads"]),
+            prefix_mlp_dim=int(config["prefix_mlp_dim"]),
+            predictor_depth=int(config["predictor_depth"]),
+            predictor_mlp_dim=int(config["predictor_mlp_dim"]),
+            fusion_dim=int(config["fusion_dim"]),
+            dropout=float(config["dropout"]),
+        )
+    elif method in {
         "rf_manifold_prefix_successor_wm",
         "rf_ema_manifold_prefix_successor_wm",
         "rf_frozen_manifold_prefix_successor_wm",
@@ -416,6 +456,7 @@ def make_rf_successor_policy(
         ActionPrefixSuccessorHead
         | ActionPrefixMomentHead
         | ManifoldTransformerMomentHead
+        | LeWMResidualTransformerHead
     ),
     planning: dict[str, Any],
     successor_config: dict[str, Any],

@@ -327,3 +327,64 @@ def test_frozen_pretrained_manifold_trains_only_the_prefix_head():
         parameter.grad is not None for parameter in module.successor.parameters()
     )
     assert len(optimizer.param_groups) == 1
+
+
+def test_frozen_pretrained_residual_trains_only_the_zero_safe_head():
+    torch.manual_seed(31)
+    world_model = swm.wm.LeWM(
+        encoder=TinyEncoder(embed_dim=4),
+        predictor=TinyPredictor(),
+        action_encoder=nn.Linear(2, 4),
+    )
+    world_model.predictor.num_frames = 2
+    protocol = load_rf_successor_training_protocol(
+        "configs/experiment/rf_frozen_residual_prefix_wm_cube_train.yaml"
+    )
+    protocol["sequence"].update(
+        history_frames=2,
+        rollout_horizon=2,
+        num_steps=5,
+    )
+    protocol["model"]["embed_dim"] = 4
+    protocol["successor"].update(
+        prefix_depth=1,
+        prefix_heads=2,
+        prefix_mlp_dim=12,
+        predictor_depth=1,
+        predictor_mlp_dim=16,
+        fusion_dim=12,
+        dropout=0.0,
+        max_horizon=2,
+    )
+    module = _build_training_module(
+        world_model,
+        protocol,
+        total_steps=2,
+        action_block_dim=2,
+        device_image_preprocessing=False,
+    )
+    logged = {}
+    module.log_dict = lambda metrics, **kwargs: logged.update(metrics)
+    module.train()
+    batch = {
+        "pixels": torch.randn(2, 5, 3, 8, 8),
+        "action": torch.randn(2, 5, 2),
+    }
+
+    loss = module._forward_loss(batch, "train")
+    loss.backward()
+    optimizer = module.configure_optimizers()["optimizer"]
+
+    assert torch.isfinite(loss)
+    assert module.sigreg is None
+    assert module.model.training is False
+    assert all(
+        not parameter.requires_grad for parameter in module.model.parameters()
+    )
+    assert all(parameter.grad is None for parameter in module.model.parameters())
+    assert module.successor.correction_out.weight.grad is not None
+    assert len(optimizer.param_groups) == 1
+    assert torch.allclose(
+        logged["train/latent_mse_h1"],
+        logged["train/base_latent_mse_h1"],
+    )
