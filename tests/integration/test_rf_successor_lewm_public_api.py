@@ -214,6 +214,78 @@ def test_ema_manifold_training_keeps_target_encoder_frozen():
     )
 
 
+def test_anchored_e2e_training_updates_student_but_not_frozen_teacher():
+    torch.manual_seed(12)
+    world_model = swm.wm.LeWM(
+        encoder=TinyEncoder(embed_dim=4),
+        predictor=TinyPredictor(),
+        action_encoder=nn.Linear(2, 4),
+        projector=nn.Sequential(nn.Linear(4, 4), nn.BatchNorm1d(4)),
+    )
+    protocol = load_rf_successor_training_protocol(
+        "configs/experiment/"
+        "rf_anchored_e2e_manifold_prefix_wm_cube_train.yaml"
+    )
+    protocol["sequence"].update(
+        history_frames=2,
+        rollout_horizon=2,
+        num_steps=5,
+    )
+    protocol["model"]["embed_dim"] = 4
+    protocol["successor"].update(
+        prefix_depth=1,
+        prefix_heads=2,
+        prefix_mlp_dim=12,
+        predictor_depth=1,
+        predictor_mlp_dim=16,
+        fusion_dim=12,
+        dropout=0.0,
+        max_horizon=2,
+    )
+    protocol["loss"]["sigreg"].update(knots=3, num_projections=4)
+    module = _build_training_module(
+        world_model,
+        protocol,
+        total_steps=2,
+        action_block_dim=2,
+        device_image_preprocessing=False,
+    )
+    logged = {}
+    module.log_dict = lambda metrics, *args, **kwargs: logged.update(metrics)
+    module.train()
+    teacher_before = {
+        key: value.detach().clone()
+        for key, value in module.target_model.state_dict().items()
+    }
+    batch = {
+        "pixels": torch.randn(2, 5, 3, 8, 8),
+        "action": torch.randn(2, 5, 2),
+    }
+
+    loss = module._forward_loss(batch, "train")
+    loss.backward()
+    module.on_train_batch_end(None, None, 0)
+    optimizer = module.configure_optimizers()["optimizer"]
+
+    assert torch.isfinite(loss)
+    assert module.use_frozen_teacher is True
+    assert module.use_ema_target is False
+    assert module.model.training is False
+    assert logged["train/geometry_anchor_loss"].item() == 0.0
+    assert module.model.encoder.projection.weight.grad is not None
+    assert all(
+        parameter.grad is None for parameter in module.target_model.parameters()
+    )
+    assert all(
+        torch.equal(value, teacher_before[key])
+        for key, value in module.target_model.state_dict().items()
+    )
+    assert any(
+        parameter.grad is not None for parameter in module.successor.parameters()
+    )
+    assert len(optimizer.param_groups) == 2
+
+
 def test_manifold_head_refinement_freezes_geometry_but_updates_head():
     torch.manual_seed(13)
     world_model = swm.wm.LeWM(

@@ -43,6 +43,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
         planning_query: str = "discounted_successor",
         terminal_query_weight: float = 0.5,
         lewm_blend_weights: list[float] | tuple[float, ...] | None = None,
+        goal_world_model: nn.Module | None = None,
     ) -> None:
         super().__init__()
         if max_horizon <= 0:
@@ -92,6 +93,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
                 "The residual head and residual planning query must be used together."
             )
         self.world_model = world_model
+        self.goal_world_model = goal_world_model
         self.successor = successor
         self.max_horizon = int(max_horizon)
         self.successor_weight = float(successor_weight)
@@ -313,7 +315,12 @@ class RewardFreeSuccessorLeWM(nn.Module):
             if key.startswith("goal_"):
                 goal_info[key[len("goal_") :]] = goal_info.pop(key)
         goal_info.pop("action", None)
-        encoded = self.world_model.encode(goal_info)["emb"]
+        goal_encoder = (
+            self.goal_world_model
+            if self.goal_world_model is not None
+            else self.world_model
+        )
+        encoded = goal_encoder.encode(goal_info)["emb"]
         info["goal_emb"] = encoded
         return encoded
 
@@ -349,10 +356,11 @@ def load_rf_successor_checkpoint(
         "rf_ema_manifold_prefix_successor_wm",
         "rf_frozen_manifold_prefix_successor_wm",
         "rf_frozen_residual_prefix_wm",
+        "rf_anchored_e2e_manifold_prefix_wm",
     }:
         raise ValueError("The checkpoint is not a supported reward-free successor model.")
     objective_version = payload.get("objective_version")
-    if objective_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
+    if objective_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
         raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
@@ -393,11 +401,13 @@ def load_rf_successor_checkpoint(
         "rf_manifold_prefix_successor_wm",
         "rf_ema_manifold_prefix_successor_wm",
         "rf_frozen_manifold_prefix_successor_wm",
+        "rf_anchored_e2e_manifold_prefix_wm",
     }:
         expected_version = {
             "rf_manifold_prefix_successor_wm": 7,
             "rf_ema_manifold_prefix_successor_wm": 8,
             "rf_frozen_manifold_prefix_successor_wm": 9,
+            "rf_anchored_e2e_manifold_prefix_wm": 11,
         }[method]
         if objective_version != expected_version or config.get(
             "architecture"
@@ -413,6 +423,16 @@ def load_rf_successor_checkpoint(
             source_hash = config.get("pretrained_world_model_sha256")
             if not isinstance(source_hash, str) or len(source_hash) != 64:
                 raise ValueError("The frozen manifold checkpoint source hash is invalid.")
+        if method == "rf_anchored_e2e_manifold_prefix_wm":
+            source_hash = config.get("pretrained_world_model_sha256")
+            if not isinstance(source_hash, str) or len(source_hash) != 64:
+                raise ValueError("The anchored checkpoint source hash is invalid.")
+            if config.get("goal_encoder") != "frozen_pretrained_teacher":
+                raise ValueError("The anchored checkpoint goal encoder is invalid.")
+            if float(config.get("geometry_anchor_weight", 0.0)) <= 0.0:
+                raise ValueError("The anchored checkpoint loss weight is invalid.")
+            if "target_world_model_state_dict" not in payload:
+                raise ValueError("The anchored checkpoint is missing its frozen teacher.")
         head = ManifoldTransformerMomentHead(
             **head_kwargs,
             gamma=float(config["gamma"]),
@@ -475,6 +495,7 @@ def load_rf_successor_checkpoint(
 def make_rf_successor_policy(
     *,
     world_model: nn.Module,
+    goal_world_model: nn.Module | None = None,
     successor: (
         ActionPrefixSuccessorHead
         | ActionPrefixMomentHead
@@ -507,6 +528,7 @@ def make_rf_successor_policy(
             successor_config.get("terminal_query_weight", 0.5)
         ),
         lewm_blend_weights=successor_config.get("lewm_blend_weights"),
+        goal_world_model=goal_world_model,
     ).to(device)
     wrapped.eval()
     wrapped.requires_grad_(False)

@@ -59,8 +59,12 @@ MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
 FROZEN_MANIFOLD_PREFIX_METHOD = "rf_frozen_manifold_prefix_successor_wm"
 FROZEN_RESIDUAL_PREFIX_METHOD = "rf_frozen_residual_prefix_wm"
+ANCHORED_E2E_MANIFOLD_PREFIX_METHOD = "rf_anchored_e2e_manifold_prefix_wm"
 FROZEN_PRETRAINED_METHODS = frozenset(
     (FROZEN_MANIFOLD_PREFIX_METHOD, FROZEN_RESIDUAL_PREFIX_METHOD)
+)
+PRETRAINED_METHODS = frozenset(
+    (*FROZEN_PRETRAINED_METHODS, ANCHORED_E2E_MANIFOLD_PREFIX_METHOD)
 )
 DIRECT_MOMENT_METHODS = frozenset((DIRECT_MOMENT_METHOD, E2E_MOMENT_METHOD))
 MANIFOLD_PREFIX_METHODS = frozenset(
@@ -69,6 +73,7 @@ MANIFOLD_PREFIX_METHODS = frozenset(
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
         FROZEN_RESIDUAL_PREFIX_METHOD,
+        ANCHORED_E2E_MANIFOLD_PREFIX_METHOD,
     )
 )
 SEQUENCE_METHODS = frozenset(
@@ -82,6 +87,7 @@ SEQUENCE_METHODS = frozenset(
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
         FROZEN_RESIDUAL_PREFIX_METHOD,
+        ANCHORED_E2E_MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -107,6 +113,8 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise TypeError("training.freeze_world_model_from_start must be boolean.")
     if method in FROZEN_PRETRAINED_METHODS:
         expected_initialization = "frozen_pretrained_lewm"
+    elif method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        expected_initialization = "anchored_pretrained_lewm"
     elif freeze_after_epoch is not None:
         expected_initialization = "resume_same_objective_checkpoint"
     else:
@@ -122,23 +130,28 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     if freeze_after_epoch is not None and method != MANIFOLD_PREFIX_METHOD:
         raise ValueError("Head-only refinement is locked to the online manifold model.")
     pretrained = protocol.get("pretrained_world_model")
-    if method in FROZEN_PRETRAINED_METHODS:
+    if method in PRETRAINED_METHODS:
         if not isinstance(pretrained, dict):
-            raise ValueError("The frozen method requires pretrained_world_model metadata.")
-        if (
-            pretrained.get("source_method") != "lewm"
-            or pretrained.get("frozen") is not True
-        ):
-            raise ValueError("The frozen method requires a frozen LeWM source.")
+            raise ValueError("The pretrained method requires source metadata.")
+        if pretrained.get("source_method") != "lewm":
+            raise ValueError("The pretrained source must be LeWM.")
         source_hash = pretrained.get("checkpoint_sha256")
         if not isinstance(source_hash, str) or len(source_hash) != 64:
             raise ValueError("The pretrained LeWM checkpoint hash is invalid.")
         if int(pretrained.get("source_epoch", 0)) <= 0:
             raise ValueError("The pretrained LeWM source epoch is invalid.")
+        if method in FROZEN_PRETRAINED_METHODS and pretrained.get("frozen") is not True:
+            raise ValueError("The frozen method requires a frozen LeWM source.")
+        if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD and (
+            pretrained.get("student_frozen") is not False
+            or pretrained.get("teacher_frozen") is not True
+        ):
+            raise ValueError(
+                "Anchored end-to-end training requires a trainable student and "
+                "frozen teacher."
+            )
     elif pretrained is not None:
-        raise ValueError(
-            "Only frozen-pretrained methods accept pretrained_world_model metadata."
-        )
+        raise ValueError("Only pretrained methods accept source metadata.")
     if protocol.get("runtime", {}).get("stable_worldmodel_version") != "0.1.1":
         raise ValueError("RF-Successor-LeWM requires stable-worldmodel 0.1.1.")
 
@@ -200,18 +213,29 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
                 "multi_step_prediction": "all_horizon_latents",
                 "consistency": "exact_manifold_successor_cumsum",
                 "target_encoder": (
-                    "ema_stop_gradient"
-                    if method == EMA_MANIFOLD_PREFIX_METHOD
+                    "frozen_teacher_stop_gradient"
+                    if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD
                     else (
-                        "frozen_pretrained"
-                        if method in FROZEN_PRETRAINED_METHODS
-                        else "online_end_to_end"
+                        "ema_stop_gradient"
+                        if method == EMA_MANIFOLD_PREFIX_METHOD
+                        else (
+                            "frozen_pretrained"
+                            if method in FROZEN_PRETRAINED_METHODS
+                            else "online_end_to_end"
+                        )
                     )
                 ),
                 "goal_conditioning": "none",
                 "policy": "none",
                 "bootstrap": "none",
             }
+            if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+                expected.update(
+                    {
+                        "goal_encoder": "frozen_pretrained_teacher",
+                        "geometry_anchor": "student_to_frozen_teacher_mse",
+                    }
+                )
             predictive_weight_key = "latent_sequence_weight"
         elif method in DIRECT_MOMENT_METHODS:
             expected = {
@@ -264,6 +288,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             EMA_MANIFOLD_PREFIX_METHOD: 8,
             FROZEN_MANIFOLD_PREFIX_METHOD: 9,
             FROZEN_RESIDUAL_PREFIX_METHOD: 10,
+            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD: 11,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -276,6 +301,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             FROZEN_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             FROZEN_RESIDUAL_PREFIX_METHOD: "causal_transformer_lewm_residual",
+            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -290,6 +316,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
             FROZEN_MANIFOLD_PREFIX_METHOD: "frozen_pretrained_latents",
             FROZEN_RESIDUAL_PREFIX_METHOD: "frozen_pretrained_residual_latents",
+            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD: "frozen_teacher_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -305,6 +332,8 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
                 if method in MANIFOLD_PREFIX_METHODS
                 else "exact_adjacent_successor_difference"
             )
+    if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        locked["goal_encoder"] = "frozen_pretrained_teacher"
     if method in {
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
@@ -332,10 +361,10 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError("model.embed_dim must be divisible by prefix_heads.")
         if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
             raise ValueError("successor.dropout must lie in [0, 1).")
-        if method in FROZEN_PRETRAINED_METHODS and successor.get(
+        if method in PRETRAINED_METHODS and successor.get(
             "pretrained_world_model_sha256"
         ) != protocol["pretrained_world_model"]["checkpoint_sha256"]:
-            raise ValueError("The frozen LeWM source hashes must match.")
+            raise ValueError("The pretrained LeWM source hashes must match.")
     elif int(successor.get("hidden_dim", 0)) <= 0:
         raise ValueError("successor.hidden_dim must be positive.")
     gamma = float(successor.get("gamma", -1.0))
@@ -355,6 +384,18 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         successor.get("target_world_ema_decay", -1.0)
     ) < 1.0:
         raise ValueError("target_world_ema_decay must lie in [0, 1).")
+    geometry_anchor = protocol.get("loss", {}).get("geometry_anchor")
+    if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        if not isinstance(geometry_anchor, dict):
+            raise ValueError("Anchored end-to-end training requires a geometry anchor.")
+        if (
+            geometry_anchor.get("target") != "frozen_pretrained_teacher"
+            or geometry_anchor.get("metric") != "coordinate_mse"
+            or float(geometry_anchor.get("weight", 0.0)) <= 0.0
+        ):
+            raise ValueError("The frozen-teacher geometry anchor is invalid.")
+    elif geometry_anchor is not None:
+        raise ValueError("Only anchored end-to-end training accepts a geometry anchor.")
     planning_weight = float(successor.get("planning_weight", -1.0))
     terminal_weight = float(successor.get("terminal_weight", -1.0))
     if min(planning_weight, terminal_weight) < 0.0:
@@ -822,9 +863,13 @@ def _build_successor_sequence_training_module(
                 EMA_BALANCED_SEQUENCE_METHOD,
                 EMA_MANIFOLD_PREFIX_METHOD,
             }
-            if self.use_ema_target:
+            self.use_frozen_teacher = (
+                protocol["method"] == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD
+            )
+            if self.use_ema_target or self.use_frozen_teacher:
                 self.target_model = copy.deepcopy(self.model).requires_grad_(False)
                 self.target_model.eval()
+            if self.use_ema_target:
                 self.target_world_ema_decay = float(
                     protocol["successor"]["target_world_ema_decay"]
                 )
@@ -891,6 +936,12 @@ def _build_successor_sequence_training_module(
             self.history_size = int(protocol["sequence"]["history_frames"])
             self.horizon = int(protocol["sequence"]["rollout_horizon"])
             self.gamma = float(successor["gamma"])
+            geometry_anchor = protocol["loss"].get("geometry_anchor")
+            self.geometry_anchor_weight = (
+                float(geometry_anchor["weight"])
+                if geometry_anchor is not None
+                else 0.0
+            )
             self.freeze_world_model_after_epoch = protocol["training"].get(
                 "freeze_world_model_after_epoch"
             )
@@ -900,7 +951,7 @@ def _build_successor_sequence_training_module(
 
         def train(self, mode: bool = True):
             super().train(mode)
-            if self.world_model_frozen:
+            if self.world_model_frozen or self.use_frozen_teacher:
                 self.model.eval()
             target_model = getattr(self, "target_model", None)
             if target_model is not None:
@@ -928,6 +979,10 @@ def _build_successor_sequence_training_module(
             )
 
         def _forward_loss(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
+            if self.use_frozen_teacher:
+                # Gradients remain enabled in eval mode; this only keeps the
+                # pretrained BatchNorm coordinate system deterministic.
+                self.model.eval()
             batch_size = int(batch["pixels"].shape[0])
             episode_ids = batch.pop("_tdwm_episode_id", None)
             cache_bytes = batch.pop("_tdwm_cache_bytes", None)
@@ -1001,6 +1056,7 @@ def _build_successor_sequence_training_module(
                         in {
                             EMA_MANIFOLD_PREFIX_METHOD,
                             FROZEN_MANIFOLD_PREFIX_METHOD,
+                            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD,
                         }
                     ),
                 )
@@ -1042,11 +1098,25 @@ def _build_successor_sequence_training_module(
                     dim=0,
                 )
                 sigreg_loss = self.sigreg(sigreg_sequences.transpose(0, 1))
-            loss = predictive_loss + self.sigreg_weight * sigreg_loss
+            if self.use_frozen_teacher:
+                geometry_anchor_loss = (
+                    embeddings - target_embeddings.detach()
+                ).square().mean()
+            else:
+                geometry_anchor_loss = predictive_loss.new_zeros(())
+            loss = (
+                predictive_loss
+                + self.sigreg_weight * sigreg_loss
+                + self.geometry_anchor_weight * geometry_anchor_loss
+            )
             metrics = {
                 f"{stage}/loss": loss.detach(),
                 f"{stage}/{predictive_metric}": predictive_loss.detach(),
                 f"{stage}/sigreg_loss": sigreg_loss.detach(),
+                f"{stage}/geometry_anchor_loss": geometry_anchor_loss.detach(),
+                f"{stage}/geometry_anchor_rms": (
+                    geometry_anchor_loss.sqrt().detach()
+                ),
                 f"{stage}/successor_mse_h1": (
                     output.successor_mse_by_horizon[0].detach()
                 ),
@@ -1116,7 +1186,7 @@ def _build_successor_sequence_training_module(
         def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
             del outputs, batch, batch_idx
             target_model = getattr(self, "target_model", None)
-            if target_model is not None:
+            if target_model is not None and self.use_ema_target:
                 ema_update_world_model(
                     target_model,
                     self.model,
@@ -1269,10 +1339,15 @@ def _successor_config(
         config["feature_group_reduction"] = successor[
             "feature_group_reduction"
         ]
-    if protocol["method"] in FROZEN_PRETRAINED_METHODS:
+    if protocol["method"] in PRETRAINED_METHODS:
         config["pretrained_world_model_sha256"] = protocol[
             "pretrained_world_model"
         ]["checkpoint_sha256"]
+    if protocol["method"] == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        config["goal_encoder"] = successor["goal_encoder"]
+        config["geometry_anchor_weight"] = protocol["loss"]["geometry_anchor"][
+            "weight"
+        ]
     return config
 
 
@@ -1314,26 +1389,28 @@ def _build_export_callback(
             method = protocol["method"]
             deployment_dir = run_dir / "checkpoints" / method
             deployment_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                {
-                    "method": method,
-                    "objective_version": protocol["successor"]["objective_version"],
-                    "deployment_checkpoint_version": 1,
-                    "epoch": epoch,
-                    "global_step": int(trainer.global_step),
-                    "world_model_state_dict": pl_module.model.state_dict(),
-                    "successor_state_dict": pl_module.successor.state_dict(),
-                    "world_model_config": model_config,
-                    "initialization": initialization_info,
-                    "successor_config": _successor_config(
-                        protocol,
-                        action_block_dim=action_block_dim,
-                        base_export_run_name=base_run_name,
-                        base_checkpoint_sha256=base_hash,
-                    ),
-                },
-                deployment_dir / f"epoch_{epoch:02d}.pt",
-            )
+            payload = {
+                "method": method,
+                "objective_version": protocol["successor"]["objective_version"],
+                "deployment_checkpoint_version": 1,
+                "epoch": epoch,
+                "global_step": int(trainer.global_step),
+                "world_model_state_dict": pl_module.model.state_dict(),
+                "successor_state_dict": pl_module.successor.state_dict(),
+                "world_model_config": model_config,
+                "initialization": initialization_info,
+                "successor_config": _successor_config(
+                    protocol,
+                    action_block_dim=action_block_dim,
+                    base_export_run_name=base_run_name,
+                    base_checkpoint_sha256=base_hash,
+                ),
+            }
+            if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+                payload["target_world_model_state_dict"] = (
+                    pl_module.target_model.state_dict()
+                )
+            torch.save(payload, deployment_dir / f"epoch_{epoch:02d}.pt")
 
     return RFSuccessorExportCallback()
 
@@ -1391,10 +1468,10 @@ def train_rf_successor_lewm(
         and resume != "required"
     ):
         raise ValueError("Head-only refinement requires an explicit checkpoint resume.")
-    frozen_pretrained = protocol["method"] in FROZEN_PRETRAINED_METHODS
-    if frozen_pretrained != (initial_world_model_checkpoint_path is not None):
+    pretrained = protocol["method"] in PRETRAINED_METHODS
+    if pretrained != (initial_world_model_checkpoint_path is not None):
         raise ValueError(
-            "The frozen-pretrained method alone requires an initial LeWM checkpoint."
+            "A pretrained method requires exactly one initial LeWM checkpoint."
         )
     if max_steps is not None and max_steps <= 0:
         raise ValueError("max_steps must be positive when provided.")
@@ -1546,7 +1623,7 @@ def train_rf_successor_lewm(
     action_block_dim = int(sequence["frame_skip"]) * action_dim
     model_config = build_model_config(protocol, action_dim)
     initialization_info = None
-    if frozen_pretrained:
+    if pretrained:
         source_name, source_file, source_cache = (
             _resolve_local_pretrained_lewm_export(
                 initial_world_model_checkpoint_path
@@ -1568,8 +1645,16 @@ def train_rf_successor_lewm(
             "source_run_name": source_name,
             "source_checkpoint_path": str(source_file),
             "source_checkpoint_sha256": source_hash,
-            "frozen": True,
         }
+        if protocol["method"] in FROZEN_PRETRAINED_METHODS:
+            initialization_info["frozen"] = True
+        else:
+            initialization_info.update(
+                {
+                    "student_frozen": False,
+                    "teacher_frozen": True,
+                }
+            )
     else:
         world_model = hydra.utils.instantiate(model_config)
     parameter_count = sum(parameter.numel() for parameter in world_model.parameters())
@@ -1706,6 +1791,11 @@ def train_rf_successor_lewm(
                 "config": model_config,
                 "initialization": initialization_info,
                 "lewm_parameters": parameter_count,
+                "trainable_lewm_parameters": sum(
+                    parameter.numel()
+                    for parameter in module.model.parameters()
+                    if parameter.requires_grad
+                ),
                 "successor_parameters": sum(
                     parameter.numel() for parameter in module.successor.parameters()
                 ),
@@ -1747,6 +1837,7 @@ def train_rf_successor_lewm(
 
 
 __all__ = [
+    "ANCHORED_E2E_MANIFOLD_PREFIX_METHOD",
     "METHOD",
     "BALANCED_SEQUENCE_METHOD",
     "DIRECT_MOMENT_METHOD",
@@ -1759,6 +1850,7 @@ __all__ = [
     "FROZEN_RESIDUAL_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHODS",
+    "PRETRAINED_METHODS",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "MultiHorizonWindows",

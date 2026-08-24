@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-validation", action="store_true")
     parser.add_argument(
         "--initial-world-model-checkpoint",
-        help="Local Stable World Model export used by frozen-pretrained methods.",
+        help="Local Stable World Model export used by pretrained methods.",
     )
     return parser.parse_args()
 

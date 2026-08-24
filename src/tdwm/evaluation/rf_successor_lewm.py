@@ -40,8 +40,15 @@ MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
 FROZEN_MANIFOLD_PREFIX_METHOD = "rf_frozen_manifold_prefix_successor_wm"
 FROZEN_RESIDUAL_PREFIX_METHOD = "rf_frozen_residual_prefix_wm"
+ANCHORED_E2E_MANIFOLD_PREFIX_METHOD = "rf_anchored_e2e_manifold_prefix_wm"
 FROZEN_PRETRAINED_METHODS = frozenset(
     (FROZEN_MANIFOLD_PREFIX_METHOD, FROZEN_RESIDUAL_PREFIX_METHOD)
+)
+PRETRAINED_METHODS = frozenset(
+    (*FROZEN_PRETRAINED_METHODS, ANCHORED_E2E_MANIFOLD_PREFIX_METHOD)
+)
+LEWM_BLEND_METHODS = frozenset(
+    (FROZEN_MANIFOLD_PREFIX_METHOD, ANCHORED_E2E_MANIFOLD_PREFIX_METHOD)
 )
 MANIFOLD_PREFIX_METHODS = frozenset(
     (
@@ -49,6 +56,7 @@ MANIFOLD_PREFIX_METHODS = frozenset(
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
         FROZEN_RESIDUAL_PREFIX_METHOD,
+        ANCHORED_E2E_MANIFOLD_PREFIX_METHOD,
     )
 )
 SEQUENCE_METHODS = frozenset(
@@ -62,6 +70,7 @@ SEQUENCE_METHODS = frozenset(
         EMA_MANIFOLD_PREFIX_METHOD,
         FROZEN_MANIFOLD_PREFIX_METHOD,
         FROZEN_RESIDUAL_PREFIX_METHOD,
+        ANCHORED_E2E_MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -96,6 +105,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             EMA_MANIFOLD_PREFIX_METHOD: 8,
             FROZEN_MANIFOLD_PREFIX_METHOD: 9,
             FROZEN_RESIDUAL_PREFIX_METHOD: 10,
+            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD: 11,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -108,6 +118,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             FROZEN_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             FROZEN_RESIDUAL_PREFIX_METHOD: "causal_transformer_lewm_residual",
+            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -122,6 +133,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
             FROZEN_MANIFOLD_PREFIX_METHOD: "frozen_pretrained_latents",
             FROZEN_RESIDUAL_PREFIX_METHOD: "frozen_pretrained_residual_latents",
+            ANCHORED_E2E_MANIFOLD_PREFIX_METHOD: "frozen_teacher_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -137,6 +149,8 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
                 if method in MANIFOLD_PREFIX_METHODS
                 else "exact_adjacent_successor_difference"
             )
+    if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        expected["goal_encoder"] = "frozen_pretrained_teacher"
     if method in {
         BALANCED_SEQUENCE_METHOD,
         EMA_BALANCED_SEQUENCE_METHOD,
@@ -167,11 +181,15 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
             raise ValueError("successor.dropout must lie in [0, 1).")
         source_hash = successor.get("pretrained_world_model_sha256")
-        if method in FROZEN_PRETRAINED_METHODS:
+        if method in PRETRAINED_METHODS:
             if not isinstance(source_hash, str) or len(source_hash) != 64:
-                raise ValueError("The frozen LeWM source hash is invalid.")
+                raise ValueError("The pretrained LeWM source hash is invalid.")
         elif source_hash is not None:
-            raise ValueError("Only the frozen method accepts a pretrained source hash.")
+            raise ValueError("Only pretrained methods accept a source hash.")
+        if method == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD and float(
+            successor.get("geometry_anchor_weight", 0.0)
+        ) <= 0.0:
+            raise ValueError("The anchored checkpoint requires a positive anchor weight.")
     if not 0.0 <= float(successor.get("gamma", -1.0)) <= 1.0:
         raise ValueError("successor.gamma must lie in [0, 1].")
     if min(
@@ -212,8 +230,8 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
         "lewm_direct_terminal_blend",
         "lewm_direct_terminal_cost_mix",
     }:
-        if method != FROZEN_MANIFOLD_PREFIX_METHOD:
-            raise ValueError("The LeWM mixture is locked to the frozen method.")
+        if method not in LEWM_BLEND_METHODS:
+            raise ValueError("The LeWM mixture requires a compatible direct model.")
         if (
             not isinstance(blend_weights, list)
             or len(blend_weights) != int(successor["max_horizon"])
@@ -300,9 +318,14 @@ def _validate_successor_config(
     for key in ("latent_recovery", "feature_group_reduction"):
         if key in successor:
             expected[key] = successor[key]
-    if protocol["method"] in FROZEN_PRETRAINED_METHODS:
+    if protocol["method"] in PRETRAINED_METHODS:
         expected["pretrained_world_model_sha256"] = successor[
             "pretrained_world_model_sha256"
+        ]
+    if protocol["method"] == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        expected["goal_encoder"] = successor["goal_encoder"]
+        expected["geometry_anchor_weight"] = successor[
+            "geometry_anchor_weight"
         ]
     for key, value in expected.items():
         if config.get(key) != value:
@@ -416,6 +439,19 @@ def evaluate_rf_successor_lewm(
             != protocol["successor"]["pretrained_world_model_sha256"]
         ):
             raise ValueError("The frozen LeWM initialization differs from protocol.")
+    elif protocol["method"] == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        initialization = payload.get("initialization", {})
+        if (
+            initialization.get("strategy") != "anchored_pretrained_lewm"
+            or initialization.get("student_frozen") is not False
+            or initialization.get("teacher_frozen") is not True
+            or initialization.get("source_checkpoint_sha256")
+            != protocol["successor"]["pretrained_world_model_sha256"]
+            or "target_world_model_state_dict" not in payload
+        ):
+            raise ValueError(
+                "The anchored student/teacher initialization differs from protocol."
+            )
     _validate_successor_config(head_config, protocol)
     _validate_checkpoint_pair(
         base_name=base_name,
@@ -464,6 +500,12 @@ def evaluate_rf_successor_lewm(
     model.load_state_dict(payload["world_model_state_dict"])
     model.eval()
     model.requires_grad_(False)
+    goal_world_model = None
+    if protocol["method"] == ANCHORED_E2E_MANIFOLD_PREFIX_METHOD:
+        goal_world_model = deepcopy(model)
+        goal_world_model.load_state_dict(payload["target_world_model_state_dict"])
+        goal_world_model.eval()
+        goal_world_model.requires_grad_(False)
     head = head.to(device).eval()
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     successor_parameter_count = sum(
@@ -481,6 +523,7 @@ def evaluate_rf_successor_lewm(
     )
     policy = make_rf_successor_policy(
         world_model=model,
+        goal_world_model=goal_world_model,
         successor=head,
         planning=planning,
         successor_config=protocol["successor"],
@@ -581,6 +624,7 @@ def evaluate_rf_successor_lewm(
 
 
 __all__ = [
+    "ANCHORED_E2E_MANIFOLD_PREFIX_METHOD",
     "BALANCED_SEQUENCE_METHOD",
     "DIRECT_MOMENT_METHOD",
     "E2E_MOMENT_METHOD",
@@ -589,8 +633,10 @@ __all__ = [
     "FROZEN_MANIFOLD_PREFIX_METHOD",
     "FROZEN_PRETRAINED_METHODS",
     "FROZEN_RESIDUAL_PREFIX_METHOD",
+    "LEWM_BLEND_METHODS",
     "MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHODS",
+    "PRETRAINED_METHODS",
     "SEQUENCE_METHODS",
     "S_ONLY_METHOD",
     "configure_rf_successor_evaluation_mode",
