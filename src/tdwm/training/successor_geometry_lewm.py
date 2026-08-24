@@ -7,6 +7,7 @@ import importlib.metadata
 import json
 import math
 import platform
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,6 @@ from tdwm.methods.successor_geometry_lewm import (
     DirectedSuccessorGeometry,
     successor_geometry_objective,
 )
-from tdwm.training.block_sampler import BlockShuffleBatchSampler
 from tdwm.training.cube_data import validate_cube_training_dataset
 from tdwm.training.gt_lewm_support import (
     LeWMTransform,
@@ -69,6 +69,51 @@ class EpisodeTaggedSubset(torch.utils.data.Subset):
                 }
             )
         return tagged
+
+
+class EpisodeDiverseBatchSampler:
+    """Build fixed validation batches with at most one clip per episode."""
+
+    def __init__(
+        self,
+        source_indices: list[int] | np.ndarray,
+        clip_indices: list[tuple[int, int]],
+        *,
+        batch_size: int,
+        seed: int,
+    ) -> None:
+        if batch_size < 2:
+            raise ValueError("Episode-diverse batches require batch_size >= 2.")
+        positions_by_episode: dict[int, deque[int]] = {}
+        for position, raw_source_index in enumerate(source_indices):
+            source_index = int(raw_source_index)
+            episode = int(clip_indices[source_index][0])
+            positions_by_episode.setdefault(episode, deque()).append(position)
+        if len(positions_by_episode) < batch_size:
+            raise ValueError("The validation split has too few distinct episodes.")
+
+        rng = np.random.default_rng(seed)
+        episode_order = list(positions_by_episode)
+        rng.shuffle(episode_order)
+        active = deque(episode_order)
+        batches: list[tuple[int, ...]] = []
+        while len(active) >= batch_size:
+            batch = []
+            for _ in range(batch_size):
+                episode = active.popleft()
+                batch.append(positions_by_episode[episode].popleft())
+                if positions_by_episode[episode]:
+                    active.append(episode)
+            batches.append(tuple(batch))
+        if not batches:
+            raise ValueError("The validation split produced no complete batch.")
+        self._batches = tuple(batches)
+
+    def __iter__(self):
+        return (list(batch) for batch in self._batches)
+
+    def __len__(self) -> int:
+        return len(self._batches)
 
 
 def load_successor_geometry_training_protocol(
@@ -157,6 +202,10 @@ def validate_successor_geometry_training_protocol(protocol: dict[str, Any]) -> N
         raise ValueError("Formal contrastive batches must remain full-sized.")
     if loader.get("validation_drop_last") is not True:
         raise ValueError("Validation contrastive batches must remain full-sized.")
+    if loader.get("validation_episode_diverse") is not True:
+        raise ValueError("Validation must guarantee one clip per episode in each batch.")
+    if loader.get("validation_locality") is not False:
+        raise ValueError("Locality-sorted validation conflicts with episode diversity.")
 
     training = protocol.get("training", {})
     if int(training.get("epochs", 0)) <= 0:
@@ -754,13 +803,11 @@ def train_successor_geometry_lewm(
         )
     validation_loader = torch.utils.data.DataLoader(
         validation_set,
-        batch_sampler=BlockShuffleBatchSampler(
+        batch_sampler=EpisodeDiverseBatchSampler(
             validation_set.indices,
+            dataset.clip_indices,
             batch_size=loader_cfg["batch_size"],
-            block_size=loader_cfg["block_size"],
-            drop_last=loader_cfg["validation_drop_last"],
-            shuffle_batches_within_block=False,
-            shuffle_blocks=False,
+            seed=seed,
         ),
         **validation_kwargs,
     )
@@ -929,6 +976,7 @@ def train_successor_geometry_lewm(
 __all__ = [
     "METHOD",
     "OBJECTIVE_VERSION",
+    "EpisodeDiverseBatchSampler",
     "SuccessorGeometryWindows",
     "_build_training_module",
     "build_successor_geometry_windows",

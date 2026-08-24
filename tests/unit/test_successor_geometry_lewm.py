@@ -17,6 +17,7 @@ from tdwm.methods.successor_geometry_lewm import (
     successor_geometry_objective,
 )
 from tdwm.training.successor_geometry_lewm import (
+    EpisodeDiverseBatchSampler,
     build_successor_geometry_windows,
     load_successor_geometry_training_protocol,
     validate_successor_geometry_training_protocol,
@@ -138,6 +139,37 @@ def test_window_builder_aligns_rollout_terminal_and_future_offsets():
     assert windows.real_terminal[:2, 0].tolist() == [3.0, 11.0]
     assert windows.future_goals[:2, :, 0].tolist() == [[4.0, 5.0], [12.0, 13.0]]
     assert windows.group_ids.tolist() == [10, 11, 10, 11, 10, 11]
+
+
+def test_validation_sampler_guarantees_cross_episode_negatives():
+    clip_indices = [
+        (episode, start)
+        for episode in range(6)
+        for start in range(3)
+    ]
+    source_indices = [7, 0, 12, 4, 16, 9, 1, 13, 5, 17, 10, 2]
+    sampler = EpisodeDiverseBatchSampler(
+        source_indices,
+        clip_indices,
+        batch_size=4,
+        seed=399,
+    )
+
+    batches = list(sampler)
+    assert batches
+    assert len(batches) == len(sampler)
+    for batch in batches:
+        episodes = {
+            clip_indices[source_indices[position]][0] for position in batch
+        }
+        assert len(episodes) == len(batch)
+    repeated = EpisodeDiverseBatchSampler(
+        source_indices,
+        clip_indices,
+        batch_size=4,
+        seed=399,
+    )
+    assert list(repeated) == batches
 
 
 def test_directed_geometry_cost_is_bounded_and_not_parameter_tied():

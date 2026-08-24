@@ -123,7 +123,8 @@ loader:
   workers: 6
   prefetch_factor: 2
   validation_workers: 2
-  validation_locality: true
+  validation_locality: false
+  validation_episode_diverse: true
   block_size: 2048
   episode_streaming: true
   episode_pool_size: 384
