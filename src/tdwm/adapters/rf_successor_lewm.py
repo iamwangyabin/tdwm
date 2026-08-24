@@ -57,6 +57,7 @@ class RewardFreeSuccessorLeWM(nn.Module):
             "manifold_projected_successor",
             "terminal_moment",
             "lewm_direct_terminal_blend",
+            "lewm_direct_terminal_cost_mix",
             "lewm_residual_terminal",
         }:
             raise ValueError("Unsupported reward-free planning query.")
@@ -69,14 +70,17 @@ class RewardFreeSuccessorLeWM(nn.Module):
             0.0 < terminal_query_weight < 1.0
         ):
             raise ValueError("terminal_query_weight must lie strictly between 0 and 1.")
-        if planning_query == "lewm_direct_terminal_blend":
+        if planning_query in {
+            "lewm_direct_terminal_blend",
+            "lewm_direct_terminal_cost_mix",
+        }:
             if not hasattr(successor, "predict_latents"):
-                raise ValueError("The LeWM blend requires a direct latent head.")
+                raise ValueError("The LeWM mixture requires a direct latent head.")
             if lewm_blend_weights is None or len(lewm_blend_weights) != max_horizon:
-                raise ValueError("The LeWM blend requires one weight per horizon.")
+                raise ValueError("The LeWM mixture requires one weight per horizon.")
             blend_weights = torch.as_tensor(lewm_blend_weights, dtype=torch.float32)
             if torch.any((blend_weights < 0.0) | (blend_weights > 1.0)):
-                raise ValueError("LeWM blend weights must lie in [0, 1].")
+                raise ValueError("LeWM mixture weights must lie in [0, 1].")
         else:
             if lewm_blend_weights is not None:
                 raise ValueError("LeWM blend weights require the matching query.")
@@ -149,7 +153,11 @@ class RewardFreeSuccessorLeWM(nn.Module):
         if (
             self.terminal_weight > 0.0
             or self.planning_query
-            in {"lewm_direct_terminal_blend", "lewm_residual_terminal"}
+            in {
+                "lewm_direct_terminal_blend",
+                "lewm_direct_terminal_cost_mix",
+                "lewm_residual_terminal",
+            }
         ):
             observed_frames = int(info_dict["pixels"].shape[2])
             rollout = self.world_model.rollout(
@@ -175,10 +183,17 @@ class RewardFreeSuccessorLeWM(nn.Module):
                 info_dict, batch=batch, samples=samples
             )
         queried_future = None
-        if self.planning_query == "lewm_direct_terminal_blend":
+        cost_mix_future = None
+        if self.planning_query in {
+            "lewm_direct_terminal_blend",
+            "lewm_direct_terminal_cost_mix",
+        }:
             direct_future = self.successor.predict_latents(history, action_candidates)
             weights = self.lewm_blend_weights[:horizon].view(1, 1, horizon, 1)
-            queried_future = future + weights * (direct_future - future)
+            if self.planning_query == "lewm_direct_terminal_blend":
+                queried_future = future + weights * (direct_future - future)
+            else:
+                cost_mix_future = direct_future
             score_features = None
         elif self.planning_query == "lewm_residual_terminal":
             queried_future = self.successor.predict_latents(
@@ -212,7 +227,15 @@ class RewardFreeSuccessorLeWM(nn.Module):
                     gamma=self.successor.gamma,
                 )[..., -1, :]
         goal = self._goal_for_samples(info_dict, batch=batch, samples=samples)
-        if queried_future is None:
+        if cost_mix_future is not None:
+            terminal_weight = self.lewm_blend_weights[horizon - 1]
+            base_cost = latent_goal_cost(future[..., -1, :], goal)
+            direct_cost = latent_goal_cost(cost_mix_future[..., -1, :], goal)
+            successor_cost = (
+                (1.0 - terminal_weight) * base_cost
+                + terminal_weight * direct_cost
+            )
+        elif queried_future is None:
             successor_cost = successor_goal_cost(score_features, goal)
         else:
             successor_cost = latent_goal_cost(queried_future[..., -1, :], goal)

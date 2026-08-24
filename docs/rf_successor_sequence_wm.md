@@ -202,6 +202,20 @@ held-out latent prediction error, never from task success or reward. A zero
 coefficient exactly recovers the pretrained LeWM prediction; a positive
 coefficient measures only the direct head's incremental predictive value.
 
+The companion `lewm_direct_terminal_cost_mix` query keeps those same frozen
+validation coefficients but mixes squared terminal costs instead of latent
+coordinates:
+
+\[
+(1-\alpha)\|z^{\rm LeWM}-g\|^2+\alpha\|z^{\rm direct}-g\|^2
+=\|(1-\alpha)z^{\rm LeWM}+\alpha z^{\rm direct}-g\|^2
++\alpha(1-\alpha)\|z^{\rm direct}-z^{\rm LeWM}\|^2.
+\]
+
+It is therefore exactly the latent blend plus a parameter-free disagreement
+penalty. CEM cannot prefer a candidate solely because one predictor is
+optimistic where the other predictor disagrees.
+
 ## Frozen LeWM residual variant
 
 `rf_frozen_residual_prefix_wm` keeps the same audited pretrained LeWM frozen,

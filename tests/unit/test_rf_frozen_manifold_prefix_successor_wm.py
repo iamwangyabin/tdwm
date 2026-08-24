@@ -120,6 +120,9 @@ def test_reward_free_validation_coefficients_enable_lewm_residual_query():
 
     validate_rf_successor_evaluation_protocol(protocol)
 
+    protocol["successor"]["planning_query"] = "lewm_direct_terminal_cost_mix"
+    validate_rf_successor_evaluation_protocol(protocol)
+
 
 def test_lewm_residual_query_recovers_each_endpoint_at_zero_and_one():
     baseline = torch.tensor(
@@ -153,6 +156,29 @@ def test_lewm_residual_query_recovers_each_endpoint_at_zero_and_one():
     assert torch.allclose(
         direct_query.get_cost(dict(info), actions), torch.tensor([[2.0, 0.0]])
     )
+
+
+def test_lewm_cost_mix_adds_the_exact_model_disagreement_penalty():
+    baseline = torch.tensor(
+        [[[[1.0, 0.0], [2.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]]]]
+    )
+    actions = torch.tensor([[[[1.0], [4.0]], [[1.0], [2.0]]]])
+    info = {
+        "pixels": torch.zeros(1, 1, 1),
+        "emb": torch.zeros(1, 1, 1, 2),
+        "goal_emb": torch.tensor([[2.0, 0.0]]),
+    }
+    mixture = RewardFreeSuccessorLeWM(
+        _BlendWorld(baseline),
+        _DirectLatentHead(),
+        max_horizon=2,
+        planning_query="lewm_direct_terminal_cost_mix",
+        lewm_blend_weights=[0.25, 0.25],
+    )
+
+    cost = mixture.get_cost(dict(info), actions)
+
+    assert torch.allclose(cost, torch.tensor([[0.5, 1.5]]))
 
 
 def test_frozen_checkpoint_round_trip(tmp_path):
