@@ -38,10 +38,18 @@ from .successor_geometry import (
     successor_feature_basis,
     successor_goal_cost,
 )
+from .successor_geometry_lewm import (
+    DirectedSuccessorGeometry,
+    SuccessorGeometryOutput,
+    discounted_horizon_weights,
+    successor_geometry_cost,
+    successor_geometry_objective,
+)
 
 __all__ = [
     "ActionPrefixMomentHead",
     "ActionPrefixSuccessorHead",
+    "DirectedSuccessorGeometry",
     "GoalConditionedPolicy",
     "GoalTailTDOutput",
     "GoalTailValue",
@@ -49,9 +57,11 @@ __all__ = [
     "MomentSequenceOutput",
     "MultiHorizonSuccessorOutput",
     "SuccessorPredictor",
+    "SuccessorGeometryOutput",
     "SuccessorSequenceOutput",
     "SuccessorTDOutput",
     "discounted_goal_tail_target",
+    "discounted_horizon_weights",
     "ema_update",
     "finite_horizon_successor_from_moments",
     "finite_horizon_successor_targets",
@@ -66,6 +76,8 @@ __all__ = [
     "multi_horizon_successor_objective",
     "successor_feature_basis",
     "successor_goal_cost",
+    "successor_geometry_cost",
+    "successor_geometry_objective",
     "successor_moments_from_sequence",
     "successor_recurrence_residual",
     "successor_sequence_objective",
