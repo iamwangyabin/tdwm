@@ -179,3 +179,18 @@ additional epoch. The latent target, loss, optimizer schedule, data order, and
 planner are unchanged. This isolates whether later control regression comes
 from representation drift: the known epoch-one goal geometry is preserved
 exactly while the dynamics head receives another full pass of supervision.
+
+## Frozen pretrained geometry variant
+
+`rf_frozen_manifold_prefix_successor_wm` starts from an audited pretrained
+LeWM checkpoint and freezes the complete world model before the first update.
+Only the causal action-prefix Transformer is trained. For each supplied action
+prefix it predicts `z_{t+1},...,z_{t+K}` in the fixed LeWM coordinate system;
+all finite-horizon successor quantities remain exact deterministic transforms
+of those predictions.
+
+Because the representation cannot move, SIGReg is inactive and the complete
+trainable objective is the single all-horizon latent MSE. This isolates the
+useful question cleanly: can dense one-step-to-multi-step prediction improve
+planning while preserving the goal-distance geometry already learned by a
+strong reward-free LeWM?

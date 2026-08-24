@@ -38,8 +38,13 @@ DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
 E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
 MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
+FROZEN_MANIFOLD_PREFIX_METHOD = "rf_frozen_manifold_prefix_successor_wm"
 MANIFOLD_PREFIX_METHODS = frozenset(
-    (MANIFOLD_PREFIX_METHOD, EMA_MANIFOLD_PREFIX_METHOD)
+    (
+        MANIFOLD_PREFIX_METHOD,
+        EMA_MANIFOLD_PREFIX_METHOD,
+        FROZEN_MANIFOLD_PREFIX_METHOD,
+    )
 )
 SEQUENCE_METHODS = frozenset(
     (
@@ -50,6 +55,7 @@ SEQUENCE_METHODS = frozenset(
         E2E_MOMENT_METHOD,
         MANIFOLD_PREFIX_METHOD,
         EMA_MANIFOLD_PREFIX_METHOD,
+        FROZEN_MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -82,6 +88,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             E2E_MOMENT_METHOD: 6,
             MANIFOLD_PREFIX_METHOD: 7,
             EMA_MANIFOLD_PREFIX_METHOD: 8,
+            FROZEN_MANIFOLD_PREFIX_METHOD: 9,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -92,6 +99,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             E2E_MOMENT_METHOD: "causal_gru_successor_increments",
             MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+            FROZEN_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -104,6 +112,7 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
             MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
             EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
+            FROZEN_MANIFOLD_PREFIX_METHOD: "frozen_pretrained_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -145,6 +154,12 @@ def validate_rf_successor_evaluation_protocol(protocol: dict[str, Any]) -> None:
             raise ValueError("model.embed_dim must be divisible by prefix_heads.")
         if not 0.0 <= float(successor.get("dropout", -1.0)) < 1.0:
             raise ValueError("successor.dropout must lie in [0, 1).")
+        source_hash = successor.get("pretrained_world_model_sha256")
+        if method == FROZEN_MANIFOLD_PREFIX_METHOD:
+            if not isinstance(source_hash, str) or len(source_hash) != 64:
+                raise ValueError("The frozen LeWM source hash is invalid.")
+        elif source_hash is not None:
+            raise ValueError("Only the frozen method accepts a pretrained source hash.")
     if not 0.0 <= float(successor.get("gamma", -1.0)) <= 1.0:
         raise ValueError("successor.gamma must lie in [0, 1].")
     if min(
@@ -249,6 +264,10 @@ def _validate_successor_config(
     for key in ("latent_recovery", "feature_group_reduction"):
         if key in successor:
             expected[key] = successor[key]
+    if protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD:
+        expected["pretrained_world_model_sha256"] = successor[
+            "pretrained_world_model_sha256"
+        ]
     for key, value in expected.items():
         if config.get(key) != value:
             raise ValueError(f"Successor checkpoint {key} differs from protocol.")
@@ -352,6 +371,15 @@ def evaluate_rf_successor_lewm(
     )
     if payload.get("method") != protocol["method"]:
         raise ValueError("The deployment checkpoint method differs from protocol.")
+    if protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD:
+        initialization = payload.get("initialization", {})
+        if (
+            initialization.get("strategy") != "frozen_pretrained_lewm"
+            or initialization.get("frozen") is not True
+            or initialization.get("source_checkpoint_sha256")
+            != protocol["successor"]["pretrained_world_model_sha256"]
+        ):
+            raise ValueError("The frozen LeWM initialization differs from protocol.")
     _validate_successor_config(head_config, protocol)
     _validate_checkpoint_pair(
         base_name=base_name,
@@ -522,6 +550,7 @@ __all__ = [
     "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
     "EMA_MANIFOLD_PREFIX_METHOD",
+    "FROZEN_MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHODS",
     "SEQUENCE_METHODS",

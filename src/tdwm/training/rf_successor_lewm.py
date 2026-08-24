@@ -55,9 +55,14 @@ DIRECT_MOMENT_METHOD = "rf_direct_moment_sequence_wm"
 E2E_MOMENT_METHOD = "rf_e2e_moment_sequence_wm"
 MANIFOLD_PREFIX_METHOD = "rf_manifold_prefix_successor_wm"
 EMA_MANIFOLD_PREFIX_METHOD = "rf_ema_manifold_prefix_successor_wm"
+FROZEN_MANIFOLD_PREFIX_METHOD = "rf_frozen_manifold_prefix_successor_wm"
 DIRECT_MOMENT_METHODS = frozenset((DIRECT_MOMENT_METHOD, E2E_MOMENT_METHOD))
 MANIFOLD_PREFIX_METHODS = frozenset(
-    (MANIFOLD_PREFIX_METHOD, EMA_MANIFOLD_PREFIX_METHOD)
+    (
+        MANIFOLD_PREFIX_METHOD,
+        EMA_MANIFOLD_PREFIX_METHOD,
+        FROZEN_MANIFOLD_PREFIX_METHOD,
+    )
 )
 SEQUENCE_METHODS = frozenset(
     (
@@ -68,6 +73,7 @@ SEQUENCE_METHODS = frozenset(
         E2E_MOMENT_METHOD,
         MANIFOLD_PREFIX_METHOD,
         EMA_MANIFOLD_PREFIX_METHOD,
+        FROZEN_MANIFOLD_PREFIX_METHOD,
     )
 )
 SUPPORTED_METHODS = frozenset((METHOD, *SEQUENCE_METHODS))
@@ -86,20 +92,43 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("This trainer only accepts supported reward-free schema 1 methods.")
     if protocol.get("environment") != "cube" or protocol.get("stage") != "full_training":
         raise ValueError("RF-Successor-LeWM training is locked to full Cube training.")
-    freeze_after_epoch = protocol.get("training", {}).get(
-        "freeze_world_model_after_epoch"
-    )
-    expected_initialization = (
-        "resume_same_objective_checkpoint"
-        if freeze_after_epoch is not None
-        else "random_from_scratch"
-    )
+    training = protocol.get("training", {})
+    freeze_after_epoch = training.get("freeze_world_model_after_epoch")
+    freeze_from_start = training.get("freeze_world_model_from_start", False)
+    if not isinstance(freeze_from_start, bool):
+        raise TypeError("training.freeze_world_model_from_start must be boolean.")
+    if method == FROZEN_MANIFOLD_PREFIX_METHOD:
+        expected_initialization = "frozen_pretrained_lewm"
+    elif freeze_after_epoch is not None:
+        expected_initialization = "resume_same_objective_checkpoint"
+    else:
+        expected_initialization = "random_from_scratch"
     if protocol.get("initialization") != expected_initialization:
         raise ValueError(
             "RF-Successor-LeWM initialization differs from its training stage."
         )
+    if freeze_from_start != (method == FROZEN_MANIFOLD_PREFIX_METHOD):
+        raise ValueError(
+            "Only the frozen-pretrained method freezes the world model from start."
+        )
     if freeze_after_epoch is not None and method != MANIFOLD_PREFIX_METHOD:
         raise ValueError("Head-only refinement is locked to the online manifold model.")
+    pretrained = protocol.get("pretrained_world_model")
+    if method == FROZEN_MANIFOLD_PREFIX_METHOD:
+        if not isinstance(pretrained, dict):
+            raise ValueError("The frozen method requires pretrained_world_model metadata.")
+        if (
+            pretrained.get("source_method") != "lewm"
+            or pretrained.get("frozen") is not True
+        ):
+            raise ValueError("The frozen method requires a frozen LeWM source.")
+        source_hash = pretrained.get("checkpoint_sha256")
+        if not isinstance(source_hash, str) or len(source_hash) != 64:
+            raise ValueError("The pretrained LeWM checkpoint hash is invalid.")
+        if int(pretrained.get("source_epoch", 0)) <= 0:
+            raise ValueError("The pretrained LeWM source epoch is invalid.")
+    elif pretrained is not None:
+        raise ValueError("Only the frozen method accepts pretrained_world_model metadata.")
     if protocol.get("runtime", {}).get("stable_worldmodel_version") != "0.1.1":
         raise ValueError("RF-Successor-LeWM requires stable-worldmodel 0.1.1.")
 
@@ -150,7 +179,11 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
                 "target_encoder": (
                     "ema_stop_gradient"
                     if method == EMA_MANIFOLD_PREFIX_METHOD
-                    else "online_end_to_end"
+                    else (
+                        "frozen_pretrained"
+                        if method == FROZEN_MANIFOLD_PREFIX_METHOD
+                        else "online_end_to_end"
+                    )
                 ),
                 "goal_conditioning": "none",
                 "policy": "none",
@@ -206,6 +239,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             E2E_MOMENT_METHOD: 6,
             MANIFOLD_PREFIX_METHOD: 7,
             EMA_MANIFOLD_PREFIX_METHOD: 8,
+            FROZEN_MANIFOLD_PREFIX_METHOD: 9,
         }[method],
         "architecture": {
             METHOD: "causal_gru_action_prefix",
@@ -216,6 +250,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             E2E_MOMENT_METHOD: "causal_gru_successor_increments",
             MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
             EMA_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
+            FROZEN_MANIFOLD_PREFIX_METHOD: "causal_transformer_manifold_successor",
         }[method],
         "feature_basis": "augmented_latent_squared_distance",
         "horizon_normalization": "discounted_prefix_mean",
@@ -228,6 +263,7 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             E2E_MOMENT_METHOD: "online_end_to_end_direct_moments",
             MANIFOLD_PREFIX_METHOD: "online_end_to_end_latents",
             EMA_MANIFOLD_PREFIX_METHOD: "ema_stop_gradient_latents",
+            FROZEN_MANIFOLD_PREFIX_METHOD: "frozen_pretrained_latents",
         }[method],
         "action_conditioning": "causal_prefix",
         "goal_conditioning": "none",
@@ -329,7 +365,6 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
     if effective_batch != configured_batch:
         raise ValueError("The overlapping-window SIGReg effective batch size changed.")
 
-    training = protocol.get("training", {})
     if training.get("epochs") != training.get("scheduler_epochs"):
         raise ValueError("Scheduler and trainer epochs must match.")
     if min(
@@ -349,6 +384,13 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
             )
         if int(stop_after_epoch) > int(training["epochs"]):
             raise ValueError("Head-only refinement exceeds the formal epoch budget.")
+    elif freeze_from_start:
+        if int(training.get("stop_after_epoch", 0)) != 1:
+            raise ValueError("The first frozen-head screen must run exactly one epoch.")
+        if float(protocol["loss"]["sigreg"]["weight"]) != 0.0:
+            raise ValueError("A frozen encoder must not carry an inactive SIGReg loss.")
+    elif training.get("stop_after_epoch") is not None:
+        raise ValueError("stop_after_epoch requires an explicit freezing stage.")
     if protocol.get("scheduler", {}).get("interval") != "optimizer_step":
         raise ValueError("The scheduler must step per optimizer update.")
     if not protocol.get("seeds"):
@@ -771,8 +813,13 @@ def _build_successor_sequence_training_module(
                     persistent=False,
                 )
             sigreg = protocol["loss"]["sigreg"]
-            self.sigreg = swm.wm.SIGReg(
-                knots=sigreg["knots"], num_proj=sigreg["num_projections"]
+            self.sigreg_weight = float(sigreg["weight"])
+            self.sigreg = (
+                swm.wm.SIGReg(
+                    knots=sigreg["knots"], num_proj=sigreg["num_projections"]
+                )
+                if self.sigreg_weight > 0.0
+                else None
             )
             successor = protocol["successor"]
             head_dimensions = {
@@ -804,6 +851,8 @@ def _build_successor_sequence_training_module(
                 "freeze_world_model_after_epoch"
             )
             self.world_model_frozen = False
+            if protocol["training"].get("freeze_world_model_from_start", False):
+                self._freeze_world_model()
 
         def train(self, mode: bool = True):
             super().train(mode)
@@ -877,7 +926,11 @@ def _build_successor_sequence_training_module(
                     windows.target_future,
                     gamma=self.gamma,
                     detach_target=(
-                        protocol["method"] == EMA_MANIFOLD_PREFIX_METHOD
+                        protocol["method"]
+                        in {
+                            EMA_MANIFOLD_PREFIX_METHOD,
+                            FROZEN_MANIFOLD_PREFIX_METHOD,
+                        }
                     ),
                 )
                 predictive_loss = output.latent_loss
@@ -906,18 +959,19 @@ def _build_successor_sequence_training_module(
                 predictive_loss = output.successor_loss
                 predictive_metric = "successor_sequence_loss"
 
-            local_count = embeddings.shape[1] - self.history_size
-            sigreg_sequences = torch.cat(
-                [
-                    embeddings[:, start : start + self.history_size + 1]
-                    for start in range(local_count)
-                ],
-                dim=0,
-            )
-            sigreg_loss = self.sigreg(sigreg_sequences.transpose(0, 1))
-            loss = predictive_loss + float(
-                protocol["loss"]["sigreg"]["weight"]
-            ) * sigreg_loss
+            if self.sigreg is None:
+                sigreg_loss = predictive_loss.new_zeros(())
+            else:
+                local_count = embeddings.shape[1] - self.history_size
+                sigreg_sequences = torch.cat(
+                    [
+                        embeddings[:, start : start + self.history_size + 1]
+                        for start in range(local_count)
+                    ],
+                    dim=0,
+                )
+                sigreg_loss = self.sigreg(sigreg_sequences.transpose(0, 1))
+            loss = predictive_loss + self.sigreg_weight * sigreg_loss
             metrics = {
                 f"{stage}/loss": loss.detach(),
                 f"{stage}/{predictive_metric}": predictive_loss.detach(),
@@ -995,17 +1049,22 @@ def _build_successor_sequence_training_module(
                 for parameter in self.model.parameters()
                 if parameter.requires_grad
             ]
-            optimizer = torch.optim.AdamW(
-                [
+            parameter_groups = []
+            if model_parameters:
+                parameter_groups.append(
                     {
                         "params": model_parameters,
                         "lr": optimizer_cfg["world_model_learning_rate"],
-                    },
-                    {
-                        "params": list(self.successor.parameters()),
-                        "lr": optimizer_cfg["successor_learning_rate"],
-                    },
-                ],
+                    }
+                )
+            parameter_groups.append(
+                {
+                    "params": list(self.successor.parameters()),
+                    "lr": optimizer_cfg["successor_learning_rate"],
+                }
+            )
+            optimizer = torch.optim.AdamW(
+                parameter_groups,
                 weight_decay=optimizer_cfg["weight_decay"],
             )
             warmup_steps = max(
@@ -1061,6 +1120,24 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _resolve_local_pretrained_lewm_export(
+    checkpoint_path: str | Path,
+) -> tuple[str, Path, Path]:
+    requested = Path(checkpoint_path).expanduser().resolve()
+    checkpoint_dir = requested if requested.is_dir() else requested.parent
+    weights = sorted(checkpoint_dir.glob("*.pt"))
+    if len(weights) != 1:
+        raise FileNotFoundError(
+            "A pretrained LeWM export must contain exactly one .pt file."
+        )
+    if checkpoint_dir.parent.name != "checkpoints":
+        raise ValueError(
+            "A pretrained LeWM export must use the public "
+            "<cache_dir>/checkpoints/<run_name> layout."
+        )
+    return checkpoint_dir.name, weights[0], checkpoint_dir.parent.parent
+
+
 def _successor_config(
     protocol: dict[str, Any],
     *,
@@ -1111,6 +1188,10 @@ def _successor_config(
         config["feature_group_reduction"] = successor[
             "feature_group_reduction"
         ]
+    if protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD:
+        config["pretrained_world_model_sha256"] = protocol[
+            "pretrained_world_model"
+        ]["checkpoint_sha256"]
     return config
 
 
@@ -1119,6 +1200,7 @@ def _build_export_callback(
     model_config: dict[str, Any],
     protocol: dict[str, Any],
     action_block_dim: int,
+    initialization_info: dict[str, Any] | None = None,
 ):
     import lightning as pl
     import stable_worldmodel as swm
@@ -1161,6 +1243,7 @@ def _build_export_callback(
                     "world_model_state_dict": pl_module.model.state_dict(),
                     "successor_state_dict": pl_module.successor.state_dict(),
                     "world_model_config": model_config,
+                    "initialization": initialization_info,
                     "successor_config": _successor_config(
                         protocol,
                         action_block_dim=action_block_dim,
@@ -1212,6 +1295,7 @@ def train_rf_successor_lewm(
     resume: str = "auto",
     max_steps: int | None = None,
     skip_validation: bool = False,
+    initial_world_model_checkpoint_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Train a reward-free successor method independently of the baselines."""
 
@@ -1226,6 +1310,11 @@ def train_rf_successor_lewm(
         and resume != "required"
     ):
         raise ValueError("Head-only refinement requires an explicit checkpoint resume.")
+    frozen_pretrained = protocol["method"] == FROZEN_MANIFOLD_PREFIX_METHOD
+    if frozen_pretrained != (initial_world_model_checkpoint_path is not None):
+        raise ValueError(
+            "The frozen-pretrained method alone requires an initial LeWM checkpoint."
+        )
     if max_steps is not None and max_steps <= 0:
         raise ValueError("max_steps must be positive when provided.")
 
@@ -1375,7 +1464,33 @@ def train_rf_successor_lewm(
     action_dim = int(dataset.get_dim("action"))
     action_block_dim = int(sequence["frame_skip"]) * action_dim
     model_config = build_model_config(protocol, action_dim)
-    world_model = hydra.utils.instantiate(model_config)
+    initialization_info = None
+    if frozen_pretrained:
+        source_name, source_file, source_cache = (
+            _resolve_local_pretrained_lewm_export(
+                initial_world_model_checkpoint_path
+            )
+        )
+        source_hash = _file_sha256(source_file)
+        expected_hash = protocol["pretrained_world_model"]["checkpoint_sha256"]
+        if source_hash != expected_hash:
+            raise ValueError("The pretrained LeWM checkpoint hash differs from protocol.")
+        world_model = swm.wm.load_pretrained(
+            source_name,
+            cache_dir=str(source_cache),
+        )
+        initialization_info = {
+            "strategy": protocol["initialization"],
+            "source_method": "lewm",
+            "source_seed": protocol["pretrained_world_model"]["source_seed"],
+            "source_epoch": protocol["pretrained_world_model"]["source_epoch"],
+            "source_run_name": source_name,
+            "source_checkpoint_path": str(source_file),
+            "source_checkpoint_sha256": source_hash,
+            "frozen": True,
+        }
+    else:
+        world_model = hydra.utils.instantiate(model_config)
     parameter_count = sum(parameter.numel() for parameter in world_model.parameters())
     expected_parameters = protocol["model"].get("parameters")
     if expected_parameters and parameter_count != expected_parameters:
@@ -1424,7 +1539,13 @@ def train_rf_successor_lewm(
     )
     callbacks = [
         checkpoint_callback,
-        _build_export_callback(run_dir, model_config, protocol, action_block_dim),
+        _build_export_callback(
+            run_dir,
+            model_config,
+            protocol,
+            action_block_dim,
+            initialization_info,
+        ),
         _build_generator_callback(generator, method=protocol["method"]),
     ]
     if episode_train_dataset is not None:
@@ -1502,6 +1623,7 @@ def train_rf_successor_lewm(
             },
             "model": {
                 "config": model_config,
+                "initialization": initialization_info,
                 "lewm_parameters": parameter_count,
                 "successor_parameters": sum(
                     parameter.numel() for parameter in module.successor.parameters()
@@ -1551,6 +1673,7 @@ __all__ = [
     "E2E_MOMENT_METHOD",
     "EMA_BALANCED_SEQUENCE_METHOD",
     "EMA_MANIFOLD_PREFIX_METHOD",
+    "FROZEN_MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHOD",
     "MANIFOLD_PREFIX_METHODS",
     "SEQUENCE_METHODS",

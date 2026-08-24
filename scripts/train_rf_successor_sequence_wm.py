@@ -30,6 +30,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--skip-validation", action="store_true")
+    parser.add_argument(
+        "--initial-world-model-checkpoint",
+        help="Local Stable World Model export used by frozen-pretrained methods.",
+    )
     return parser.parse_args()
 
 
@@ -52,6 +56,7 @@ def main() -> None:
         resume=args.resume,
         max_steps=args.max_steps,
         skip_validation=args.skip_validation,
+        initial_world_model_checkpoint_path=args.initial_world_model_checkpoint,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

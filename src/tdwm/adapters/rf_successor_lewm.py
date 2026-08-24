@@ -277,10 +277,11 @@ def load_rf_successor_checkpoint(
         "rf_e2e_moment_sequence_wm",
         "rf_manifold_prefix_successor_wm",
         "rf_ema_manifold_prefix_successor_wm",
+        "rf_frozen_manifold_prefix_successor_wm",
     }:
         raise ValueError("The checkpoint is not a supported reward-free successor model.")
     objective_version = payload.get("objective_version")
-    if objective_version not in {1, 2, 3, 4, 5, 6, 7, 8}:
+    if objective_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
         raise ValueError("Unsupported reward-free successor objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
         raise ValueError("Unsupported RF-Successor-LeWM checkpoint version.")
@@ -299,10 +300,12 @@ def load_rf_successor_checkpoint(
     if method in {
         "rf_manifold_prefix_successor_wm",
         "rf_ema_manifold_prefix_successor_wm",
+        "rf_frozen_manifold_prefix_successor_wm",
     }:
         expected_version = {
             "rf_manifold_prefix_successor_wm": 7,
             "rf_ema_manifold_prefix_successor_wm": 8,
+            "rf_frozen_manifold_prefix_successor_wm": 9,
         }[method]
         if objective_version != expected_version or config.get(
             "architecture"
@@ -314,6 +317,10 @@ def load_rf_successor_checkpoint(
             config.get("target_world_ema_decay", -1.0)
         ) < 1.0:
             raise ValueError("The EMA manifold checkpoint has an invalid target decay.")
+        if method == "rf_frozen_manifold_prefix_successor_wm":
+            source_hash = config.get("pretrained_world_model_sha256")
+            if not isinstance(source_hash, str) or len(source_hash) != 64:
+                raise ValueError("The frozen manifold checkpoint source hash is invalid.")
         head = ManifoldTransformerMomentHead(
             **head_kwargs,
             gamma=float(config["gamma"]),
