@@ -1,0 +1,40 @@
+schema_version: 1
+id: policy_auxiliary_successor_geometry_lewm
+display_name: Policy-Auxiliary Successor-Geometry LeWM
+family: reward_free_world_model
+
+components:
+  world_model: stable_worldmodel.wm.lewm.LeWM
+  geometry: tdwm.methods.successor_geometry_lewm.DirectedSuccessorGeometry
+  training_only_policy_head: torch.nn.Linear
+  adapter: tdwm.adapters.successor_geometry_lewm.SuccessorGeometryLeWM
+
+training:
+  initialization: random_from_scratch
+  end_to_end: true
+  staged_training: false
+  frozen_teacher: false
+  reward: none
+  goal_conditioning: none
+  latent_transition: absolute_next_latent
+  expert_action_auxiliary: normalized_action_block_from_causal_latent_history
+  expert_action_auxiliary_weight: 0.3333333333333333
+  learned_policy_used_at_inference: false
+  td_bootstrap: false
+  dynamics: open_loop_latent_mse_h1_to_hK
+  geometry: discounted_future_pair_infonce
+  geometry_queries: [real_terminal, predicted_terminal]
+  negatives: cross_episode_in_batch
+  same_episode_negatives: masked
+
+inference:
+  planner: stable_worldmodel.solver.CEMSolver
+  candidate_rollout: lewm_action_conditioned_latent_rollout
+  cost: one_minus_directed_successor_cosine
+  learned_action_policy: false
+
+hypothesis:
+  statement: A training-only action-prediction mode should improve shared action-state features while absolute LeWM dynamics preserve CEM candidate dispersion.
+  claim_status: untested
+  rejected_ablation: residual_policy_successor_geometry_lewm
+  baseline: configs/experiment/successor_geometry_lewm_cube_checkpoint_o50.yaml

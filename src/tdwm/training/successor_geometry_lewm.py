@@ -22,7 +22,12 @@ from tdwm.methods.successor_geometry_lewm import (
     DirectedSuccessorGeometry,
     successor_geometry_objective,
 )
-from tdwm.methods.residual_policy_lewm import build_expert_action_windows
+from tdwm.methods.residual_policy_lewm import (
+    POLICY_AUXILIARY_METHOD,
+    POLICY_AUXILIARY_METHODS,
+    RESIDUAL_POLICY_METHOD,
+    build_expert_action_windows,
+)
 from tdwm.training.cube_data import validate_cube_training_dataset
 from tdwm.training.gt_lewm_support import (
     LeWMTransform,
@@ -44,8 +49,7 @@ from tdwm.training.lewm import _git_revision
 
 
 METHOD = "successor_geometry_lewm"
-RESIDUAL_POLICY_METHOD = "residual_policy_successor_geometry_lewm"
-SUPPORTED_METHODS = frozenset((METHOD, RESIDUAL_POLICY_METHOD))
+SUPPORTED_METHODS = frozenset((METHOD, *POLICY_AUXILIARY_METHODS))
 OBJECTIVE_VERSION = 1
 
 
@@ -165,7 +169,7 @@ def validate_successor_geometry_training_protocol(protocol: dict[str, Any]) -> N
         "reward": "none",
         "policy": (
             "expert_action_auxiliary_training_only"
-            if method == RESIDUAL_POLICY_METHOD
+            if method in POLICY_AUXILIARY_METHODS
             else "none"
         ),
         "td_bootstrap": False,
@@ -175,15 +179,21 @@ def validate_successor_geometry_training_protocol(protocol: dict[str, Any]) -> N
     for key, value in expected_objective.items():
         if objective.get(key) != value:
             raise ValueError(f"objective.{key} must be {value!r}.")
-    if method == RESIDUAL_POLICY_METHOD:
+    if method in POLICY_AUXILIARY_METHODS:
         model = protocol.get("model", {})
-        if model.get("transition_parameterization") != "residual_delta":
+        expected_transition = (
+            "residual_delta"
+            if method == RESIDUAL_POLICY_METHOD
+            else "absolute_next_latent"
+        )
+        if model.get("transition_parameterization") != expected_transition:
             raise ValueError(
-                "Residual-policy LeWM requires residual_delta transitions."
+                f"{method} requires {expected_transition} transitions."
             )
-        if model.get("zero_initialize_transition_output") is not True:
+        expected_zero_init = method == RESIDUAL_POLICY_METHOD
+        if model.get("zero_initialize_transition_output") is not expected_zero_init:
             raise ValueError(
-                "Residual-policy LeWM requires a zero-initialized delta head."
+                "zero_initialize_transition_output differs from the method."
             )
         policy = protocol.get("policy_auxiliary", {})
         expected_policy = {
@@ -398,7 +408,9 @@ def _build_training_module(
                 protocol["sequence"]["max_future_offset"]
             )
             self.gamma = float(geometry["gamma"])
-            self.use_policy_auxiliary = protocol["method"] == RESIDUAL_POLICY_METHOD
+            self.use_policy_auxiliary = (
+                protocol["method"] in POLICY_AUXILIARY_METHODS
+            )
             if self.use_policy_auxiliary:
                 resolved_action_block_dim = action_block_dim
                 if resolved_action_block_dim is None:
@@ -688,10 +700,14 @@ def _geometry_config(
         "base_export_run_name": base_run_name,
         "base_checkpoint_sha256": base_sha256,
     }
-    if protocol["method"] == RESIDUAL_POLICY_METHOD:
+    if protocol["method"] in POLICY_AUXILIARY_METHODS:
         config.update(
             {
-                "latent_transition": "current_latent_plus_delta",
+                "latent_transition": (
+                    "current_latent_plus_delta"
+                    if protocol["method"] == RESIDUAL_POLICY_METHOD
+                    else "absolute_next_latent"
+                ),
                 "policy_used_at_inference": False,
             }
         )
@@ -749,7 +765,7 @@ def _build_export_callback(
                     base_sha256=base_hash,
                 ),
             }
-            if method == RESIDUAL_POLICY_METHOD:
+            if method in POLICY_AUXILIARY_METHODS:
                 payload.update(
                     {
                         "policy_head_state_dict": pl_module.policy_head.state_dict(),
@@ -1083,7 +1099,7 @@ def train_successor_geometry_lewm(
                         for parameter in module.policy_head.parameters()
                     )
                     + int(module.policy_null_action_embedding.numel())
-                    if protocol["method"] == RESIDUAL_POLICY_METHOD
+                    if protocol["method"] in POLICY_AUXILIARY_METHODS
                     else 0
                 ),
             },
@@ -1125,6 +1141,8 @@ def train_successor_geometry_lewm(
 __all__ = [
     "METHOD",
     "OBJECTIVE_VERSION",
+    "POLICY_AUXILIARY_METHOD",
+    "POLICY_AUXILIARY_METHODS",
     "RESIDUAL_POLICY_METHOD",
     "SUPPORTED_METHODS",
     "EpisodeDiverseBatchSampler",

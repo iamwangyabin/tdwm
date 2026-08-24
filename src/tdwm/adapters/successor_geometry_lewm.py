@@ -12,11 +12,15 @@ from tdwm.methods.successor_geometry_lewm import (
     DirectedSuccessorGeometry,
     successor_geometry_cost,
 )
+from tdwm.methods.residual_policy_lewm import (
+    POLICY_AUXILIARY_METHOD,
+    POLICY_AUXILIARY_METHODS,
+    RESIDUAL_POLICY_METHOD,
+)
 
 
 METHOD = "successor_geometry_lewm"
-RESIDUAL_POLICY_METHOD = "residual_policy_successor_geometry_lewm"
-SUPPORTED_METHODS = frozenset((METHOD, RESIDUAL_POLICY_METHOD))
+SUPPORTED_METHODS = frozenset((METHOD, *POLICY_AUXILIARY_METHODS))
 
 
 class SuccessorGeometryLeWM(nn.Module):
@@ -158,7 +162,7 @@ def load_successor_geometry_checkpoint(
         "reward": "none",
         "policy": (
             "expert_action_auxiliary_training_only"
-            if method == RESIDUAL_POLICY_METHOD
+            if method in POLICY_AUXILIARY_METHODS
             else "none"
         ),
         "td_bootstrap": False,
@@ -228,6 +232,8 @@ def make_successor_geometry_policy(
 
 __all__ = [
     "METHOD",
+    "POLICY_AUXILIARY_METHOD",
+    "POLICY_AUXILIARY_METHODS",
     "RESIDUAL_POLICY_METHOD",
     "SUPPORTED_METHODS",
     "SuccessorGeometryLeWM",

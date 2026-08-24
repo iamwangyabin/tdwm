@@ -9,6 +9,13 @@ import torch
 from torch import nn
 
 
+POLICY_AUXILIARY_METHOD = "policy_auxiliary_successor_geometry_lewm"
+RESIDUAL_POLICY_METHOD = "residual_policy_successor_geometry_lewm"
+POLICY_AUXILIARY_METHODS = frozenset(
+    (POLICY_AUXILIARY_METHOD, RESIDUAL_POLICY_METHOD)
+)
+
+
 class ResidualLeWM(swm.wm.LeWM):
     """Parameterize each public LeWM prediction as the current latent plus a delta."""
 
@@ -89,6 +96,9 @@ def build_expert_action_windows(
 
 __all__ = [
     "ExpertActionWindows",
+    "POLICY_AUXILIARY_METHOD",
+    "POLICY_AUXILIARY_METHODS",
+    "RESIDUAL_POLICY_METHOD",
     "ResidualLeWM",
     "build_expert_action_windows",
 ]

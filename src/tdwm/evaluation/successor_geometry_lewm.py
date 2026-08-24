@@ -16,6 +16,7 @@ import yaml
 from tdwm.adapters import prepare_cloud_runtime
 from tdwm.adapters.successor_geometry_lewm import (
     METHOD,
+    POLICY_AUXILIARY_METHODS,
     RESIDUAL_POLICY_METHOD,
     SUPPORTED_METHODS,
     load_successor_geometry_checkpoint,
@@ -65,7 +66,7 @@ def validate_successor_geometry_evaluation_protocol(
         "reward": "none",
         "policy": (
             "expert_action_auxiliary_training_only"
-            if method == RESIDUAL_POLICY_METHOD
+            if method in POLICY_AUXILIARY_METHODS
             else "none"
         ),
         "td_bootstrap": False,
@@ -74,9 +75,14 @@ def validate_successor_geometry_evaluation_protocol(
     for key, value in expected.items():
         if geometry.get(key) != value:
             raise ValueError(f"geometry.{key} must be {value!r}.")
-    if method == RESIDUAL_POLICY_METHOD:
-        if geometry.get("latent_transition") != "current_latent_plus_delta":
-            raise ValueError("Residual-policy evaluation requires residual dynamics.")
+    if method in POLICY_AUXILIARY_METHODS:
+        expected_transition = (
+            "current_latent_plus_delta"
+            if method == RESIDUAL_POLICY_METHOD
+            else "absolute_next_latent"
+        )
+        if geometry.get("latent_transition") != expected_transition:
+            raise ValueError("The evaluation latent transition is inconsistent.")
         if geometry.get("policy_used_at_inference") is not False:
             raise ValueError(
                 "The expert-action auxiliary must stay disabled at inference."
@@ -182,7 +188,7 @@ def _validate_geometry_config(
         "policy",
         "td_bootstrap",
     )
-    if protocol["method"] == RESIDUAL_POLICY_METHOD:
+    if protocol["method"] in POLICY_AUXILIARY_METHODS:
         keys += ("latent_transition", "policy_used_at_inference")
     for key in keys:
         if config.get(key) != geometry.get(key):

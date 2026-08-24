@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from tdwm.adapters.successor_geometry_lewm import (
+    POLICY_AUXILIARY_METHOD,
     RESIDUAL_POLICY_METHOD,
     load_successor_geometry_checkpoint,
 )
@@ -275,6 +276,24 @@ def test_residual_policy_protocol_keeps_the_action_head_out_of_inference():
     assert training["model"]["transition_parameterization"] == "residual_delta"
     assert training["policy_auxiliary"]["inference_usage"] == "disabled"
     assert evaluation["planning"]["initial_distribution"] == "cem_gaussian_no_actor"
+    assert evaluation["inference_objective"]["learned_action_policy"] is False
+
+
+def test_policy_auxiliary_protocol_preserves_absolute_lewm_dynamics():
+    training = load_successor_geometry_training_protocol(
+        "configs/experiment/"
+        "policy_auxiliary_successor_geometry_lewm_cube_train.yaml"
+    )
+    evaluation = load_successor_geometry_evaluation_protocol(
+        "configs/experiment/"
+        "policy_auxiliary_successor_geometry_lewm_cube_checkpoint_o50.yaml"
+    )
+
+    assert training["method"] == POLICY_AUXILIARY_METHOD
+    assert training["model"]["transition_parameterization"] == "absolute_next_latent"
+    assert training["model"]["zero_initialize_transition_output"] is False
+    assert training["policy_auxiliary"]["inference_usage"] == "disabled"
+    assert evaluation["geometry"]["latent_transition"] == "absolute_next_latent"
     assert evaluation["inference_objective"]["learned_action_policy"] is False
 
 
