@@ -22,6 +22,7 @@ from tdwm.methods.successor_geometry_lewm import (
     DirectedSuccessorGeometry,
     successor_geometry_objective,
 )
+from tdwm.methods.residual_policy_lewm import build_expert_action_windows
 from tdwm.training.cube_data import validate_cube_training_dataset
 from tdwm.training.gt_lewm_support import (
     LeWMTransform,
@@ -43,6 +44,8 @@ from tdwm.training.lewm import _git_revision
 
 
 METHOD = "successor_geometry_lewm"
+RESIDUAL_POLICY_METHOD = "residual_policy_successor_geometry_lewm"
+SUPPORTED_METHODS = frozenset((METHOD, RESIDUAL_POLICY_METHOD))
 OBJECTIVE_VERSION = 1
 
 
@@ -126,7 +129,8 @@ def load_successor_geometry_training_protocol(
 
 
 def validate_successor_geometry_training_protocol(protocol: dict[str, Any]) -> None:
-    if protocol.get("schema_version") != 1 or protocol.get("method") != METHOD:
+    method = protocol.get("method")
+    if protocol.get("schema_version") != 1 or method not in SUPPORTED_METHODS:
         raise ValueError("Successor-Geometry LeWM requires its schema 1 protocol.")
     if protocol.get("environment") != "cube" or protocol.get("stage") != "full_training":
         raise ValueError("Successor-Geometry LeWM training is locked to Cube.")
@@ -159,7 +163,11 @@ def validate_successor_geometry_training_protocol(protocol: dict[str, Any]) -> N
         "same_episode_negatives": "masked",
         "goal_conditioning": "none",
         "reward": "none",
-        "policy": "none",
+        "policy": (
+            "expert_action_auxiliary_training_only"
+            if method == RESIDUAL_POLICY_METHOD
+            else "none"
+        ),
         "td_bootstrap": False,
         "dynamics_weight": 1.0,
         "geometry_weight": 1.0,
@@ -167,6 +175,36 @@ def validate_successor_geometry_training_protocol(protocol: dict[str, Any]) -> N
     for key, value in expected_objective.items():
         if objective.get(key) != value:
             raise ValueError(f"objective.{key} must be {value!r}.")
+    if method == RESIDUAL_POLICY_METHOD:
+        model = protocol.get("model", {})
+        if model.get("transition_parameterization") != "residual_delta":
+            raise ValueError(
+                "Residual-policy LeWM requires residual_delta transitions."
+            )
+        if model.get("zero_initialize_transition_output") is not True:
+            raise ValueError(
+                "Residual-policy LeWM requires a zero-initialized delta head."
+            )
+        policy = protocol.get("policy_auxiliary", {})
+        expected_policy = {
+            "target": "normalized_expert_action_block",
+            "conditioning": "latent_history_and_past_actions_with_null_current_action",
+            "head": "zero_initialized_linear",
+            "inference_usage": "disabled",
+        }
+        for key, value in expected_policy.items():
+            if policy.get(key) != value:
+                raise ValueError(f"policy_auxiliary.{key} must be {value!r}.")
+        if float(policy.get("weight", 0.0)) <= 0.0:
+            raise ValueError("policy_auxiliary.weight must be positive.")
+        if float(
+            protocol.get("optimizer", {}).get(
+                "policy_auxiliary_learning_rate", 0.0
+            )
+        ) <= 0.0:
+            raise ValueError(
+                "optimizer.policy_auxiliary_learning_rate must be positive."
+            )
 
     geometry = protocol.get("geometry", {})
     expected_geometry = {
@@ -317,6 +355,7 @@ def _build_training_module(
     total_steps: int,
     *,
     device_image_preprocessing: bool,
+    action_block_dim: int | None = None,
 ):
     import lightning as pl
     import stable_worldmodel as swm
@@ -359,6 +398,29 @@ def _build_training_module(
                 protocol["sequence"]["max_future_offset"]
             )
             self.gamma = float(geometry["gamma"])
+            self.use_policy_auxiliary = protocol["method"] == RESIDUAL_POLICY_METHOD
+            if self.use_policy_auxiliary:
+                resolved_action_block_dim = action_block_dim
+                if resolved_action_block_dim is None:
+                    resolved_action_block_dim = getattr(
+                        self.model.action_encoder, "input_dim", None
+                    )
+                if (
+                    resolved_action_block_dim is None
+                    or int(resolved_action_block_dim) <= 0
+                ):
+                    raise ValueError(
+                        "The expert-action head requires action_block_dim."
+                    )
+                embed_dim = int(protocol["model"]["embed_dim"])
+                self.policy_null_action_embedding = torch.nn.Parameter(
+                    torch.zeros(embed_dim)
+                )
+                self.policy_head = torch.nn.Linear(
+                    embed_dim, int(resolved_action_block_dim)
+                )
+                torch.nn.init.zeros_(self.policy_head.weight)
+                torch.nn.init.zeros_(self.policy_head.bias)
 
         def _preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
             if not self.device_image_preprocessing:
@@ -370,12 +432,40 @@ def _build_training_module(
                 size=protocol["image_preprocessing"]["size"],
             )
 
+        def _expert_action_loss(
+            self,
+            latents: torch.Tensor,
+            actions: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            windows = build_expert_action_windows(
+                latents,
+                actions,
+                history_size=self.history_size,
+            )
+            past_action_embeddings = self.model.action_encoder(
+                windows.past_actions
+            )
+            null_action = self.policy_null_action_embedding.reshape(1, 1, -1)
+            null_action = null_action.expand(windows.history.shape[0], 1, -1)
+            conditioning = torch.cat((past_action_embeddings, null_action), dim=1)
+            features = self.model.predictor(windows.history, conditioning)
+            predicted_actions = self.policy_head(features[:, -1])
+            valid = windows.target_is_finite
+            if torch.any(valid):
+                loss = (
+                    predicted_actions[valid] - windows.target_actions[valid]
+                ).square().mean()
+            else:
+                loss = predicted_actions.sum() * 0.0
+            return loss, valid.sum().to(dtype=latents.dtype)
+
         def _forward_loss(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
             batch_size = int(batch["pixels"].shape[0])
             episode_ids = batch.pop("_tdwm_episode_id", None)
             cache_bytes = batch.pop("_tdwm_cache_bytes", None)
             pixels = self._preprocess(batch["pixels"])
-            actions = torch.nan_to_num(batch["action"], 0.0)
+            raw_actions = batch["action"]
+            actions = torch.nan_to_num(raw_actions, 0.0)
             encoded = self.model.encode({**batch, "pixels": pixels, "action": actions})
             latents = encoded["emb"]
             expected_steps = int(protocol["sequence"]["num_steps"])
@@ -416,6 +506,13 @@ def _build_training_module(
                 predicted_future - windows.target_future
             ).square().mean(dim=(0, 2))
             dynamics_loss = dynamics_mse_by_horizon.mean()
+            policy_loss = dynamics_loss.new_zeros(())
+            policy_targets = dynamics_loss.new_zeros(())
+            if self.use_policy_auxiliary:
+                policy_loss, policy_targets = self._expert_action_loss(
+                    latents,
+                    raw_actions,
+                )
             geometry_pairs = windows.geometry_count_per_clip * batch_size
             predicted_terminal = predicted_future[:geometry_pairs, -1]
             geometry_output = successor_geometry_objective(
@@ -442,6 +539,9 @@ def _build_training_module(
                 + float(protocol["loss"]["sigreg"]["weight"]) * sigreg_loss
                 + float(objective["geometry_weight"]) * geometry_output.loss
             )
+            if self.use_policy_auxiliary:
+                policy_weight = float(protocol["policy_auxiliary"]["weight"])
+                loss = loss + policy_weight * policy_loss
             metrics = {
                 f"{stage}/loss": loss.detach(),
                 f"{stage}/dynamics_loss": dynamics_loss.detach(),
@@ -475,6 +575,13 @@ def _build_training_module(
                 ),
                 f"{stage}/geometry_pairs": loss.new_tensor(float(geometry_pairs)),
             }
+            if self.use_policy_auxiliary:
+                metrics.update(
+                    {
+                        f"{stage}/expert_action_loss": policy_loss.detach(),
+                        f"{stage}/expert_action_targets": policy_targets.detach(),
+                    }
+                )
             if episode_ids is not None:
                 metrics[f"{stage}/unique_episodes_per_batch"] = loss.new_tensor(
                     float(torch.unique(episode_ids).numel())
@@ -503,17 +610,28 @@ def _build_training_module(
 
         def configure_optimizers(self):
             optimizer_cfg = protocol["optimizer"]
+            parameter_groups = [
+                {
+                    "params": list(self.model.parameters()),
+                    "lr": optimizer_cfg["world_model_learning_rate"],
+                },
+                {
+                    "params": list(self.geometry.parameters()),
+                    "lr": optimizer_cfg["geometry_learning_rate"],
+                },
+            ]
+            if self.use_policy_auxiliary:
+                parameter_groups.append(
+                    {
+                        "params": [
+                            self.policy_null_action_embedding,
+                            *self.policy_head.parameters(),
+                        ],
+                        "lr": optimizer_cfg["policy_auxiliary_learning_rate"],
+                    }
+                )
             optimizer = torch.optim.AdamW(
-                [
-                    {
-                        "params": list(self.model.parameters()),
-                        "lr": optimizer_cfg["world_model_learning_rate"],
-                    },
-                    {
-                        "params": list(self.geometry.parameters()),
-                        "lr": optimizer_cfg["geometry_learning_rate"],
-                    },
-                ],
+                parameter_groups,
                 weight_decay=optimizer_cfg["weight_decay"],
             )
             warmup_steps = max(
@@ -549,7 +667,7 @@ def _geometry_config(
     protocol: dict[str, Any], *, base_run_name: str, base_sha256: str
 ) -> dict[str, Any]:
     geometry = protocol["geometry"]
-    return {
+    config = {
         "objective_version": OBJECTIVE_VERSION,
         "architecture": geometry["architecture"],
         "embed_dim": protocol["model"]["embed_dim"],
@@ -565,11 +683,19 @@ def _geometry_config(
         "negative_sampling": "cross_episode_in_batch",
         "same_episode_negatives": "masked",
         "reward": "none",
-        "policy": "none",
+        "policy": protocol["objective"]["policy"],
         "td_bootstrap": False,
         "base_export_run_name": base_run_name,
         "base_checkpoint_sha256": base_sha256,
     }
+    if protocol["method"] == RESIDUAL_POLICY_METHOD:
+        config.update(
+            {
+                "latent_transition": "current_latent_plus_delta",
+                "policy_used_at_inference": False,
+            }
+        )
+    return config
 
 
 def _build_export_callback(
@@ -605,26 +731,35 @@ def _build_export_callback(
                     "Stable World Model export did not contain exactly one weight file."
                 )
             base_hash = _file_sha256(base_weights[0])
-            deployment_dir = run_dir / "checkpoints" / METHOD
+            method = protocol["method"]
+            deployment_dir = run_dir / "checkpoints" / method
             deployment_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                {
-                    "method": METHOD,
-                    "objective_version": OBJECTIVE_VERSION,
-                    "deployment_checkpoint_version": 1,
-                    "epoch": epoch,
-                    "global_step": int(trainer.global_step),
-                    "world_model_state_dict": pl_module.model.state_dict(),
-                    "geometry_state_dict": pl_module.geometry.state_dict(),
-                    "world_model_config": model_config,
-                    "geometry_config": _geometry_config(
-                        protocol,
-                        base_run_name=base_run_name,
-                        base_sha256=base_hash,
-                    ),
-                },
-                deployment_dir / f"epoch_{epoch:02d}.pt",
-            )
+            payload = {
+                "method": method,
+                "objective_version": OBJECTIVE_VERSION,
+                "deployment_checkpoint_version": 1,
+                "epoch": epoch,
+                "global_step": int(trainer.global_step),
+                "world_model_state_dict": pl_module.model.state_dict(),
+                "geometry_state_dict": pl_module.geometry.state_dict(),
+                "world_model_config": model_config,
+                "geometry_config": _geometry_config(
+                    protocol,
+                    base_run_name=base_run_name,
+                    base_sha256=base_hash,
+                ),
+            }
+            if method == RESIDUAL_POLICY_METHOD:
+                payload.update(
+                    {
+                        "policy_head_state_dict": pl_module.policy_head.state_dict(),
+                        "policy_null_action_embedding": (
+                            pl_module.policy_null_action_embedding.detach().cpu()
+                        ),
+                        "policy_used_at_inference": False,
+                    }
+                )
+            torch.save(payload, deployment_dir / f"epoch_{epoch:02d}.pt")
 
     return SuccessorGeometryExportCallback()
 
@@ -814,6 +949,8 @@ def train_successor_geometry_lewm(
 
     action_dim = int(dataset.get_dim("action"))
     model_config = build_model_config(protocol, action_dim)
+    if protocol["method"] == RESIDUAL_POLICY_METHOD:
+        model_config["_target_"] = "tdwm.methods.residual_policy_lewm.ResidualLeWM"
     world_model = hydra.utils.instantiate(model_config)
     parameter_count = sum(parameter.numel() for parameter in world_model.parameters())
     expected_parameters = protocol["model"].get("parameters")
@@ -844,6 +981,7 @@ def train_successor_geometry_lewm(
         protocol,
         total_steps,
         device_image_preprocessing=device_preprocessing,
+        action_block_dim=int(sequence["frame_skip"]) * action_dim,
     )
 
     checkpoint_dir = run_dir / "checkpoints" / "lightning"
@@ -902,9 +1040,11 @@ def train_successor_geometry_lewm(
         with manifest_path.open() as stream:
             previous = json.load(stream)
         previous_protocol = previous.get("protocol", {})
-        if previous_protocol.get("method") != METHOD or previous_protocol.get(
-            "geometry", {}
-        ).get("objective_version") != OBJECTIVE_VERSION:
+        if (
+            previous_protocol.get("method") != protocol["method"]
+            or previous_protocol.get("geometry", {}).get("objective_version")
+            != OBJECTIVE_VERSION
+        ):
             raise RuntimeError("Refusing to resume an incompatible objective.")
         checkpoint_path = str(last_checkpoint)
 
@@ -921,7 +1061,7 @@ def train_successor_geometry_lewm(
     write_json(
         run_dir / "training_manifest.json",
         {
-            "method": METHOD,
+            "method": protocol["method"],
             "protocol": protocol,
             "protocol_path": str(Path(protocol_path).resolve()),
             "seed": seed,
@@ -936,6 +1076,15 @@ def train_successor_geometry_lewm(
                 "lewm_parameters": parameter_count,
                 "geometry_parameters": sum(
                     parameter.numel() for parameter in module.geometry.parameters()
+                ),
+                "policy_auxiliary_parameters": (
+                    sum(
+                        parameter.numel()
+                        for parameter in module.policy_head.parameters()
+                    )
+                    + int(module.policy_null_action_embedding.numel())
+                    if protocol["method"] == RESIDUAL_POLICY_METHOD
+                    else 0
                 ),
             },
             "training": {
@@ -976,6 +1125,8 @@ def train_successor_geometry_lewm(
 __all__ = [
     "METHOD",
     "OBJECTIVE_VERSION",
+    "RESIDUAL_POLICY_METHOD",
+    "SUPPORTED_METHODS",
     "EpisodeDiverseBatchSampler",
     "SuccessorGeometryWindows",
     "_build_training_module",

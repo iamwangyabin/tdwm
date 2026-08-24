@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from tdwm.adapters.successor_geometry_lewm import (
+    RESIDUAL_POLICY_METHOD,
     load_successor_geometry_checkpoint,
 )
 from tdwm.evaluation.successor_geometry_lewm import (
@@ -15,6 +16,10 @@ from tdwm.methods.successor_geometry_lewm import (
     discounted_horizon_weights,
     successor_geometry_cost,
     successor_geometry_objective,
+)
+from tdwm.methods.residual_policy_lewm import (
+    ResidualLeWM,
+    build_expert_action_windows,
 )
 from tdwm.training.successor_geometry_lewm import (
     EpisodeDiverseBatchSampler,
@@ -141,6 +146,46 @@ def test_window_builder_aligns_rollout_terminal_and_future_offsets():
     assert windows.group_ids.tolist() == [10, 11, 10, 11, 10, 11]
 
 
+def test_expert_action_windows_are_causal_and_mask_nonfinite_targets():
+    latents = torch.arange(6, dtype=torch.float32).reshape(1, 6, 1)
+    actions = torch.arange(12, dtype=torch.float32).reshape(1, 6, 2)
+    actions[:, 3] = torch.nan
+
+    windows = build_expert_action_windows(latents, actions, history_size=3)
+
+    assert windows.count_per_clip == 3
+    assert windows.history[:, :, 0].tolist() == [
+        [0.0, 1.0, 2.0],
+        [1.0, 2.0, 3.0],
+        [2.0, 3.0, 4.0],
+    ]
+    assert windows.past_actions.shape == (3, 2, 2)
+    assert windows.target_actions[:, 0].tolist() == [4.0, 0.0, 8.0]
+    assert windows.target_is_finite.tolist() == [True, False, True]
+
+
+def test_residual_lewm_is_identity_at_initialization():
+    class Predictor(nn.Module):
+        def forward(self, embeddings, action_embeddings):
+            return embeddings + action_embeddings
+
+    pred_proj = nn.Sequential(nn.Linear(4, 8), nn.GELU(), nn.Linear(8, 4))
+    model = ResidualLeWM(
+        encoder=nn.Identity(),
+        predictor=Predictor(),
+        action_encoder=nn.Identity(),
+        pred_proj=pred_proj,
+    )
+    embeddings = torch.randn(3, 2, 4)
+    action_embeddings = torch.randn(3, 2, 4)
+
+    predicted = model.predict(embeddings, action_embeddings)
+
+    assert torch.equal(predicted, embeddings)
+    assert torch.count_nonzero(pred_proj[-1].weight) == 0
+    assert torch.count_nonzero(pred_proj[-1].bias) == 0
+
+
 def test_validation_sampler_guarantees_cross_episode_negatives():
     clip_indices = [
         (episode, start)
@@ -214,6 +259,23 @@ def test_training_and_evaluation_protocols_are_reward_free_and_end_to_end():
         assert "objective.reward" in str(error)
     else:
         raise AssertionError("A reward-conditioned protocol must be rejected.")
+
+
+def test_residual_policy_protocol_keeps_the_action_head_out_of_inference():
+    training = load_successor_geometry_training_protocol(
+        "configs/experiment/residual_policy_successor_geometry_lewm_cube_train.yaml"
+    )
+    evaluation = load_successor_geometry_evaluation_protocol(
+        "configs/experiment/"
+        "residual_policy_successor_geometry_lewm_cube_checkpoint_o50.yaml"
+    )
+
+    assert training["method"] == RESIDUAL_POLICY_METHOD
+    assert training["objective"]["reward"] == "none"
+    assert training["model"]["transition_parameterization"] == "residual_delta"
+    assert training["policy_auxiliary"]["inference_usage"] == "disabled"
+    assert evaluation["planning"]["initial_distribution"] == "cem_gaussian_no_actor"
+    assert evaluation["inference_objective"]["learned_action_policy"] is False
 
 
 def test_successor_geometry_checkpoint_round_trip(tmp_path):

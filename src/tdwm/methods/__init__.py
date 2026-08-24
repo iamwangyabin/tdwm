@@ -32,6 +32,11 @@ from .rf_successor_lewm import (
     successor_recurrence_residual,
     successor_sequence_objective,
 )
+from .residual_policy_lewm import (
+    ExpertActionWindows,
+    ResidualLeWM,
+    build_expert_action_windows,
+)
 from .successor_geometry import (
     goal_cost_weights,
     latent_goal_cost,
@@ -50,16 +55,19 @@ __all__ = [
     "ActionPrefixMomentHead",
     "ActionPrefixSuccessorHead",
     "DirectedSuccessorGeometry",
+    "ExpertActionWindows",
     "GoalConditionedPolicy",
     "GoalTailTDOutput",
     "GoalTailValue",
     "LocalSuccessorHeads",
     "MomentSequenceOutput",
     "MultiHorizonSuccessorOutput",
+    "ResidualLeWM",
     "SuccessorPredictor",
     "SuccessorGeometryOutput",
     "SuccessorSequenceOutput",
     "SuccessorTDOutput",
+    "build_expert_action_windows",
     "discounted_goal_tail_target",
     "discounted_horizon_weights",
     "ema_update",

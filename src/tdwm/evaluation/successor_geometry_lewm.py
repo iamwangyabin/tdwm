@@ -16,6 +16,8 @@ import yaml
 from tdwm.adapters import prepare_cloud_runtime
 from tdwm.adapters.successor_geometry_lewm import (
     METHOD,
+    RESIDUAL_POLICY_METHOD,
+    SUPPORTED_METHODS,
     load_successor_geometry_checkpoint,
     make_successor_geometry_policy,
 )
@@ -44,7 +46,8 @@ def load_successor_geometry_evaluation_protocol(
 def validate_successor_geometry_evaluation_protocol(
     protocol: dict[str, Any],
 ) -> None:
-    if protocol.get("schema_version") != 1 or protocol.get("method") != METHOD:
+    method = protocol.get("method")
+    if protocol.get("schema_version") != 1 or method not in SUPPORTED_METHODS:
         raise ValueError("Successor geometry evaluation requires its schema 1 method.")
     if protocol.get("environment") != "cube" or protocol.get("stage") != "planner_evaluation":
         raise ValueError("Successor geometry evaluation is locked to Cube planning.")
@@ -60,13 +63,24 @@ def validate_successor_geometry_evaluation_protocol(
         "negative_sampling": "cross_episode_in_batch",
         "same_episode_negatives": "masked",
         "reward": "none",
-        "policy": "none",
+        "policy": (
+            "expert_action_auxiliary_training_only"
+            if method == RESIDUAL_POLICY_METHOD
+            else "none"
+        ),
         "td_bootstrap": False,
         "planning_cost": "one_minus_directed_cosine",
     }
     for key, value in expected.items():
         if geometry.get(key) != value:
             raise ValueError(f"geometry.{key} must be {value!r}.")
+    if method == RESIDUAL_POLICY_METHOD:
+        if geometry.get("latent_transition") != "current_latent_plus_delta":
+            raise ValueError("Residual-policy evaluation requires residual dynamics.")
+        if geometry.get("policy_used_at_inference") is not False:
+            raise ValueError(
+                "The expert-action auxiliary must stay disabled at inference."
+            )
     for key in (
         "embed_dim",
         "projection_dim",
@@ -168,6 +182,8 @@ def _validate_geometry_config(
         "policy",
         "td_bootstrap",
     )
+    if protocol["method"] == RESIDUAL_POLICY_METHOD:
+        keys += ("latent_transition", "policy_used_at_inference")
     for key in keys:
         if config.get(key) != geometry.get(key):
             raise ValueError(f"Geometry checkpoint {key} differs from protocol.")
@@ -226,7 +242,9 @@ def evaluate_successor_geometry_lewm(
     )
     geometry_file = _resolve_geometry_checkpoint(geometry_checkpoint_path)
     geometry, geometry_config, payload = load_successor_geometry_checkpoint(
-        geometry_file, map_location=device
+        geometry_file,
+        map_location=device,
+        expected_method=protocol["method"],
     )
     _validate_geometry_config(geometry_config, protocol)
     _validate_checkpoint_pair(
@@ -383,7 +401,7 @@ def evaluate_successor_geometry_lewm(
         "elapsed_seconds": time.time() - started,
         "world_model_parameter_count": world_model_parameter_count,
         "geometry_parameter_count": geometry_parameter_count,
-        "method": METHOD,
+        "method": protocol["method"],
         "smoke": smoke,
         "pilot": pilot,
         "protocol_manifest": str(output_dir / "protocol_manifest.json"),

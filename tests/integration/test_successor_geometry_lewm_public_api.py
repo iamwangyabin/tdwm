@@ -8,6 +8,7 @@ from torch import nn
 
 from tdwm.adapters.successor_geometry_lewm import SuccessorGeometryLeWM
 from tdwm.methods.successor_geometry_lewm import DirectedSuccessorGeometry
+from tdwm.methods.residual_policy_lewm import ResidualLeWM
 from tdwm.training.successor_geometry_lewm import (
     _build_training_module,
     load_successor_geometry_training_protocol,
@@ -40,6 +41,15 @@ def make_tiny_world_model(embed_dim: int = 4):
         encoder=TinyEncoder(embed_dim),
         predictor=TinyPredictor(),
         action_encoder=nn.Linear(2, embed_dim),
+    )
+
+
+def make_tiny_residual_world_model(embed_dim: int = 4):
+    return ResidualLeWM(
+        encoder=TinyEncoder(embed_dim),
+        predictor=TinyPredictor(),
+        action_encoder=nn.Linear(2, embed_dim),
+        pred_proj=nn.Sequential(nn.Linear(embed_dim, embed_dim)),
     )
 
 
@@ -109,5 +119,50 @@ def test_joint_training_backpropagates_geometry_through_lewm_rollout():
     loss.backward()
 
     assert torch.isfinite(loss)
+    assert any(parameter.grad is not None for parameter in module.model.parameters())
+    assert all(parameter.grad is not None for parameter in module.geometry.parameters())
+
+
+def test_residual_policy_auxiliary_trains_with_the_shared_public_lewm_rollout():
+    torch.manual_seed(22)
+    world_model = make_tiny_residual_world_model()
+    protocol = load_successor_geometry_training_protocol(
+        "configs/experiment/residual_policy_successor_geometry_lewm_cube_train.yaml"
+    )
+    protocol["sequence"].update(
+        history_frames=2,
+        rollout_horizon=2,
+        max_future_offset=2,
+        num_steps=7,
+    )
+    protocol["model"]["embed_dim"] = 4
+    protocol["geometry"].update(
+        projection_dim=3,
+        hidden_dim=8,
+        rollout_horizon=2,
+        max_future_offset=2,
+    )
+    protocol["loss"]["sigreg"].update(knots=3, num_projections=4)
+    module = _build_training_module(
+        world_model,
+        protocol,
+        total_steps=2,
+        device_image_preprocessing=False,
+        action_block_dim=2,
+    )
+    module.log_dict = lambda *args, **kwargs: None
+    batch = {
+        "pixels": torch.randn(2, 7, 3, 8, 8),
+        "action": torch.randn(2, 7, 2),
+        "_tdwm_episode_id": torch.tensor([5, 10]),
+    }
+
+    loss = module._forward_loss(batch, "train")
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert module.use_policy_auxiliary is True
+    assert module.policy_head.weight.grad is not None
+    assert torch.count_nonzero(module.policy_head.weight.grad) > 0
     assert any(parameter.grad is not None for parameter in module.model.parameters())
     assert all(parameter.grad is not None for parameter in module.geometry.parameters())

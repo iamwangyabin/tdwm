@@ -15,6 +15,8 @@ from tdwm.methods.successor_geometry_lewm import (
 
 
 METHOD = "successor_geometry_lewm"
+RESIDUAL_POLICY_METHOD = "residual_policy_successor_geometry_lewm"
+SUPPORTED_METHODS = frozenset((METHOD, RESIDUAL_POLICY_METHOD))
 
 
 class SuccessorGeometryLeWM(nn.Module):
@@ -129,6 +131,7 @@ def load_successor_geometry_checkpoint(
     checkpoint_path: str | Path,
     *,
     map_location: str | torch.device = "cpu",
+    expected_method: str | None = None,
 ) -> tuple[DirectedSuccessorGeometry, dict[str, Any], dict[str, Any]]:
     """Load the paired deployment checkpoint produced by the joint trainer."""
 
@@ -137,8 +140,11 @@ def load_successor_geometry_checkpoint(
         map_location=map_location,
         weights_only=False,
     )
-    if payload.get("method") != METHOD:
+    method = payload.get("method")
+    if method not in SUPPORTED_METHODS:
         raise ValueError("The checkpoint is not a successor-geometry LeWM model.")
+    if expected_method is not None and method != expected_method:
+        raise ValueError("The checkpoint method differs from the evaluation protocol.")
     if payload.get("objective_version") != 1:
         raise ValueError("Unsupported successor-geometry objective version.")
     if payload.get("deployment_checkpoint_version") != 1:
@@ -150,7 +156,11 @@ def load_successor_geometry_checkpoint(
         "architecture": "dual_mlp_directed_cosine",
         "goal_conditioning": "future_pairs_only",
         "reward": "none",
-        "policy": "none",
+        "policy": (
+            "expert_action_auxiliary_training_only"
+            if method == RESIDUAL_POLICY_METHOD
+            else "none"
+        ),
         "td_bootstrap": False,
         "query_sources": ["real_terminal", "predicted_terminal"],
     }
@@ -218,6 +228,8 @@ def make_successor_geometry_policy(
 
 __all__ = [
     "METHOD",
+    "RESIDUAL_POLICY_METHOD",
+    "SUPPORTED_METHODS",
     "SuccessorGeometryLeWM",
     "load_successor_geometry_checkpoint",
     "make_successor_geometry_policy",
