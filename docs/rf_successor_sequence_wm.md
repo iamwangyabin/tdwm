@@ -169,3 +169,13 @@ and the single latent-sequence loss remain unchanged. This controlled test
 targets the observed failure mode in which online validation MSE improved but
 Cube planning regressed; the EMA encoder is training-only and is not exported
 for planning.
+
+## Frozen-geometry head refinement
+
+`rf_manifold_prefix_successor_wm_cube_head_refine` resumes the online
+manifold model at epoch one, freezes the complete LeWM encoder/projector in
+evaluation mode, and trains only the causal action-prefix Transformer for one
+additional epoch. The latent target, loss, optimizer schedule, data order, and
+planner are unchanged. This isolates whether later control regression comes
+from representation drift: the known epoch-one goal geometry is preserved
+exactly while the dynamics head receives another full pass of supervision.

@@ -151,6 +151,39 @@ def test_manifold_protocol_keeps_data_budget_and_encoder_fixed():
     assert "hidden_dim" not in manifold["successor"]
 
 
+def test_manifold_head_refinement_changes_only_the_training_stage():
+    online = load_rf_successor_training_protocol(
+        "configs/experiment/rf_manifold_prefix_successor_wm_cube_train.yaml"
+    )
+    refinement = load_rf_successor_training_protocol(
+        "configs/experiment/"
+        "rf_manifold_prefix_successor_wm_cube_head_refine.yaml"
+    )
+
+    for key in (
+        "dataset",
+        "split",
+        "sequence",
+        "model",
+        "joint_objective",
+        "successor",
+        "loss",
+        "loader",
+        "optimizer",
+        "scheduler",
+        "logging",
+    ):
+        assert refinement[key] == online[key]
+    assert refinement["method"] == online["method"]
+    assert refinement["initialization"] == "resume_same_objective_checkpoint"
+    assert refinement["training"]["freeze_world_model_after_epoch"] == 1
+    assert refinement["training"]["stop_after_epoch"] == 2
+    refinement_training = dict(refinement["training"])
+    refinement_training.pop("freeze_world_model_after_epoch")
+    refinement_training.pop("stop_after_epoch")
+    assert refinement_training == online["training"]
+
+
 def test_manifold_evaluation_protocol_uses_only_the_derived_successor():
     protocol = load_rf_successor_evaluation_protocol(
         "configs/experiment/"

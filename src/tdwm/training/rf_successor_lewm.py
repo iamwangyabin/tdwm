@@ -86,8 +86,20 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("This trainer only accepts supported reward-free schema 1 methods.")
     if protocol.get("environment") != "cube" or protocol.get("stage") != "full_training":
         raise ValueError("RF-Successor-LeWM training is locked to full Cube training.")
-    if protocol.get("initialization") != "random_from_scratch":
-        raise ValueError("RF-Successor-LeWM must start from random parameters.")
+    freeze_after_epoch = protocol.get("training", {}).get(
+        "freeze_world_model_after_epoch"
+    )
+    expected_initialization = (
+        "resume_same_objective_checkpoint"
+        if freeze_after_epoch is not None
+        else "random_from_scratch"
+    )
+    if protocol.get("initialization") != expected_initialization:
+        raise ValueError(
+            "RF-Successor-LeWM initialization differs from its training stage."
+        )
+    if freeze_after_epoch is not None and method != MANIFOLD_PREFIX_METHOD:
+        raise ValueError("Head-only refinement is locked to the online manifold model.")
     if protocol.get("runtime", {}).get("stable_worldmodel_version") != "0.1.1":
         raise ValueError("RF-Successor-LeWM requires stable-worldmodel 0.1.1.")
 
@@ -327,6 +339,16 @@ def validate_rf_successor_training_protocol(protocol: dict[str, Any]) -> None:
         raise ValueError("The formal optimizer budget must be positive.")
     if training.get("model_compile") is not False:
         raise ValueError("The first RF-Successor-LeWM protocol keeps compilation off.")
+    if freeze_after_epoch is not None:
+        stop_after_epoch = training.get("stop_after_epoch")
+        if int(freeze_after_epoch) < 1 or int(stop_after_epoch or 0) != int(
+            freeze_after_epoch
+        ) + 1:
+            raise ValueError(
+                "Head-only refinement must run exactly one epoch after freezing."
+            )
+        if int(stop_after_epoch) > int(training["epochs"]):
+            raise ValueError("Head-only refinement exceeds the formal epoch budget.")
     if protocol.get("scheduler", {}).get("interval") != "optimizer_step":
         raise ValueError("The scheduler must step per optimizer update.")
     if not protocol.get("seeds"):
@@ -778,13 +800,29 @@ def _build_successor_sequence_training_module(
             self.history_size = int(protocol["sequence"]["history_frames"])
             self.horizon = int(protocol["sequence"]["rollout_horizon"])
             self.gamma = float(successor["gamma"])
+            self.freeze_world_model_after_epoch = protocol["training"].get(
+                "freeze_world_model_after_epoch"
+            )
+            self.world_model_frozen = False
 
         def train(self, mode: bool = True):
             super().train(mode)
+            if self.world_model_frozen:
+                self.model.eval()
             target_model = getattr(self, "target_model", None)
             if target_model is not None:
                 target_model.eval()
             return self
+
+        def _freeze_world_model(self) -> None:
+            self.model.requires_grad_(False)
+            self.model.eval()
+            self.world_model_frozen = True
+
+        def on_train_epoch_start(self) -> None:
+            freeze_epoch = self.freeze_world_model_after_epoch
+            if freeze_epoch is not None and self.current_epoch >= int(freeze_epoch):
+                self._freeze_world_model()
 
         def _preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
             if not self.device_image_preprocessing:
@@ -806,7 +844,11 @@ def _build_successor_sequence_training_module(
                 key: value for key, value in batch.items() if key != "action"
             }
             encoder_input["pixels"] = pixels
-            embeddings = self.model.encode(encoder_input)["emb"]
+            if self.world_model_frozen:
+                with torch.no_grad():
+                    embeddings = self.model.encode(encoder_input)["emb"]
+            else:
+                embeddings = self.model.encode(encoder_input)["emb"]
             expected_steps = int(protocol["sequence"]["num_steps"])
             if embeddings.shape[1] != expected_steps:
                 raise RuntimeError("The encoded clip has an unexpected length.")
@@ -1178,6 +1220,12 @@ def train_rf_successor_lewm(
         raise ValueError(f"Seed {seed} is not in the locked seeds {protocol['seeds']}.")
     if resume not in {"auto", "never", "required"}:
         raise ValueError("resume must be one of: auto, never, required.")
+    if (
+        protocol.get("training", {}).get("freeze_world_model_after_epoch")
+        is not None
+        and resume != "required"
+    ):
+        raise ValueError("Head-only refinement requires an explicit checkpoint resume.")
     if max_steps is not None and max_steps <= 0:
         raise ValueError("max_steps must be positive when provided.")
 
@@ -1389,6 +1437,8 @@ def train_rf_successor_lewm(
         epochs = 2 if resume == "required" else 1
     elif max_steps is not None:
         epochs = 1
+    elif protocol["training"].get("stop_after_epoch") is not None:
+        epochs = int(protocol["training"]["stop_after_epoch"])
     else:
         epochs = protocol["training"]["epochs"]
     with patch(
