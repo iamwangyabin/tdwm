@@ -12,6 +12,26 @@ from tdwm.evaluation.aligned_e2e_mc_gt_lewm import (
 from tdwm.methods.goal_tail_value import BoundaryAnchoredGoalTailValue
 
 
+def test_locked_aligned_o50_evaluation_protocol_is_valid():
+    with open(
+        "configs/experiment/aligned_e2e_mc_gt_lewm_cube_seed3072_o50.yaml"
+    ) as stream:
+        protocol = yaml.safe_load(stream)
+
+    validate_aligned_e2e_mc_gt_evaluation_protocol(protocol)
+
+    assert protocol["evaluation"] == {
+        "episodes": 50,
+        "goal_offset": 50,
+        "start_goal_source": "same dataset episode",
+        "requires_tail_beyond_planning_horizon": True,
+    }
+    assert protocol["planning"]["iterations"] == 30
+    assert protocol["planning"]["candidates"] == 300
+    assert protocol["base_checkpoint"]["epoch"] == 10
+    assert protocol["value_checkpoint"]["epoch"] == 10
+
+
 def test_aligned_deployment_checkpoint_restores_exact_boundary(tmp_path):
     value = BoundaryAnchoredGoalTailValue(
         history_dim=11,
