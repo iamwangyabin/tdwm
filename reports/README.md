@@ -1,6 +1,6 @@
 # TDWM 实验结果总览
 
-最后更新：2026-08-26（Asia/Shanghai）
+最后更新：2026-08-27（Asia/Shanghai）
 
 本目录汇总当前仓库报告、趋动云下载结果和本地 3090 服务器下载结果。大型日志、数据、
 视频和 checkpoint 不进入 Git；本地轻量原始文件位于被 Git 忽略的
@@ -15,8 +15,9 @@
   排名。
 - 趋动云 LeWM 48% checkpoint 与 3090 LeWM 72% checkpoint 的训练数据读取、checkpoint
   和运行代码状态不同，不能把二者当作同一次 baseline。
-- 3090 工作树采集时落后远程并包含未提交修改；正式复现前必须重新核对 manifest、配置、
-  checkpoint SHA-256 和 Git revision。
+- 部分历史 3090 结果采集时工作树落后远程并包含未提交修改；本次 Aligned 正式评测使用
+  锁定提交的干净工作树，其他运行在正式复现前仍须逐项核对 manifest、配置、checkpoint
+  SHA-256 和 Git revision。
 - 部分旧报告在生成正式 CEM 结果前写成“尚未评测”。本 README 以之后保存的
   `results.json` 为最新事实，并保留旧报告作为训练过程记录。
 
@@ -44,6 +45,7 @@ E2E 实验的配对统计和失败机制审计见
 
 | 运行 | Success | 耗时 |
 | --- | ---: | ---: |
+| Aligned E2E MC-GT-LeWM，epoch 10 | **62%** | 332.36 s |
 | LeWM `lewm_seed3072_e10_matched_o50_retry` | 54% | 379.93 s |
 | Successor Geometry LeWM，epoch 3 | 46% | 422.45 s |
 | Policy-Auxiliary Successor Geometry，epoch 3 | 40% | 463.07 s |
@@ -76,6 +78,12 @@ E2E 实验的配对统计和失败机制审计见
 另有 Successor Geometry world-only O50 诊断：`40%`（20/50，458.83 s）。
 `validation-fit hybrid` 等名称明确表示使用了 validation-fit/post-hoc 选择，不应与预先锁定
 的主方法结果混写。
+
+Aligned 与配对 LeWM 使用相同的 50 个 start--goal pair、planning seed 和 CEM 预算。Aligned
+为 31/50，LeWM 为 27/50，观测差为 `+8` 个百分点（净增 4 个成功 episode）；配对计数为
+both-success 26、Aligned-only 5、LeWM-only 1、neither 18，双侧 exact McNemar
+`p=0.21875`。这是单训练 seed 的正向观察，尚不能声称方法优于 baseline。完整协议和审计
+信息见 [`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md)。
 
 ## 3090 Pilot 与 Smoke 结果
 
@@ -124,7 +132,7 @@ Smoke 只有 1 episode，`0%` 或 `100%` 仅表示链路是否运行，不能解
 | 3090 Successor Geometry LeWM | epoch 3，12,000 steps | 正式 O50 `46%`；world-only `40%` |
 | 3090 Policy-Auxiliary Successor Geometry | epoch 3，12,000 steps | 正式 O50 `40%` |
 | 3090 Residual-Policy Successor Geometry | epoch 3，12,000 steps | 正式 O50 `32%` |
-| 3090 Aligned E2E MC-GT-LeWM | epoch 10，127,960 steps | 训练完成；当前下载结果中没有对应正式 CEM `results.json` |
+| 3090 Aligned E2E MC-GT-LeWM | epoch 10，127,960 steps | 正式 O50 `62%`（31/50）；配对 LeWM `54%`（27/50） |
 | 3090 GT-LeWM v2 | epoch 10，127,960 steps | 训练完成；当前下载结果中没有对应正式 CEM `results.json` |
 | 3090 RF-Successor-LeWM | epoch 10，127,960 steps | 训练完成；当前下载结果中没有对应正式 CEM `results.json` |
 
@@ -160,7 +168,7 @@ loss `0.16631`、prediction loss `0.03154`、SIGReg `1.34375`；当时验证约�
 
 ## 完整评测文件索引
 
-本地 3090 目录包含 54 个 `results.json`；上文已经覆盖全部 35 个正式/主结果和诊断、
+本地 3090 目录包含 55 个 `results.json`；上文已经覆盖全部 36 个正式/主结果和诊断、
 7 个 pilot、12 个 smoke。趋动云另有 2 个 LeWM `results.json`。具体相对路径、协议 manifest
 和逐 episode 布尔结果保存在本地忽略目录，并由以下轻量索引记录：
 
@@ -252,6 +260,7 @@ loss `0.16631`、prediction loss `0.03154`、SIGReg `1.34375`；当时验证约�
 | [`mc_gt_lewm_cube_seed3072.md`](mc_gt_lewm_cube_seed3072.md) | MC-GT-LeWM 离线训练指标与审计信息 |
 | [`td_gt_lewm_cube_seed3072.md`](td_gt_lewm_cube_seed3072.md) | TD-GT-LeWM 离线训练指标与审计信息 |
 | [`e2e_joint_td_gt_lewm_cube_seed3072.md`](e2e_joint_td_gt_lewm_cube_seed3072.md) | E2E 负结果、配对统计和 formulation 偏差审计 |
+| [`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md) | Aligned E2E MC-GT-LeWM 正式 O50 结果、配对统计和复现信息 |
 | [`baseline_tdmpc2_cartpole.md`](baseline_tdmpc2_cartpole.md) | TD-MPC2 CartPole sparse/dense 诊断 |
 | [`baseline_lewm_pusht_training.md`](baseline_lewm_pusht_training.md) | 未完成的 PushT 过渡训练记录 |
 | [`server_experiment_index.md`](server_experiment_index.md) | 趋动云日志和轻量 artifact 索引 |
@@ -265,7 +274,9 @@ loss `0.16631`、prediction loss `0.03154`、SIGReg `1.34375`；当时验证约�
    TD-GT-LeWM 为 72%，没有观测提升。
 3. 第一版 E2E Joint TD-GT-LeWM 为 56%，且 world-only 已降至 62%；这是带明确协议偏差的
    负结果，不构成对修正 formulation 的最终证伪。
-4. O50 successor 系列当前正式结果为 22%--56%，但存在协议、checkpoint、post-hoc 选择
+4. 锁定协议的 Aligned E2E MC-GT-LeWM O50 为 62%，配对 LeWM 为 54%，观测差为
+   `+8` 个百分点；但 exact McNemar `p=0.21875`，且只有一个训练 seed，不能据此声称优越。
+5. O50 successor 系列当前正式结果为 22%--56%，但存在协议、checkpoint、post-hoc 选择
    和实现差异，尚不能据此选出优于 LeWM 的方法。
-5. 项目仍缺少受控多 seed、统一 checkpoint、统一 planner 和锁定 episode split 的最终比较；
+6. 项目仍缺少受控多 seed、统一 checkpoint、统一 planner 和锁定 episode split 的最终比较；
    因此尚未达到“提出方法优于 baseline”的里程碑。

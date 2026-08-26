@@ -1,6 +1,6 @@
 # 3090 服务器实验结果索引
 
-记录日期：2026-08-26（Asia/Shanghai）
+首次记录：2026-08-26；最后更新：2026-08-27（Asia/Shanghai）
 
 ## 来源与保存策略
 
@@ -9,7 +9,7 @@
   `.jsonl` 和 `.csv` 文件。
 - 本地原始轻量结果：
   `/Users/wangyabin/Documents/GitHub/tdwm/outputs/server_experiments/3090/outputs/`
-- 共 454 个文件、8,138,019 bytes：41 个日志、353 个 JSON、51 个 CSV、9 个 JSONL；
+- 共 459 个文件、8,198,700 bytes：42 个日志、357 个 JSON、51 个 CSV、9 个 JSONL；
   JSON 全部解析通过。
 - 未下载 `.ckpt`、`.pt`、`.pth`、`.safetensors`、`.npz`、`.npy` 或任何
   `checkpoints/` 内容。原始结果目录被 Git 忽略，GitHub 只保存本索引。
@@ -22,7 +22,7 @@
 | `mc_gt_lewm_cube_full` | epoch 20，`global_step=4720` | validation MC MSE `0.00607095`；O25 评测 `74%` |
 | `td_gt_lewm_cube_full` | epoch 20，`global_step=4720` | validation MC MSE `0.00864504`；O25 评测 `72%` |
 | `e2e_joint_td_gt_lewm_cube_full` | epoch 10，`global_step=127960` | O25 评测 `56%` |
-| `aligned_e2e_mc_gt_lewm_cube_full_v2` | epoch 10，`global_step=127960` | 已保留训练 manifest、结果和 metrics |
+| `aligned_e2e_mc_gt_lewm_cube_full_v2` | epoch 10，`global_step=127960` | 正式 O50 评测 `62%`（31/50）；配对 LeWM 为 `54%`（27/50） |
 | `gt_lewm_cube_training_v2` | epoch 10，`global_step=127960` | 已保留训练 manifest、结果和 metrics |
 | `rf_successor_lewm_cube_v1` | epoch 10，`global_step=127960` | 已保留训练 manifest、结果和 metrics |
 | `successor_geometry_lewm_cube_seed399_v2` | epoch 3，`global_step=12000` | O50 评测 `46%`；world-only `40%` |
@@ -37,6 +37,7 @@
 | 结果文件（相对 3090 输出目录） | success rate |
 | --- | ---: |
 | `seed_3072_3090_episode_stream_formal/evaluation_o25/results.json` | 72% |
+| `aligned_e2e_mc_gt_lewm_cube_seed3072_epoch10_o50/results.json` | 62% |
 | `lewm_seed3072_e10_matched_o50_retry/results.json` | 54% |
 | `mc_gt_lewm_cube_seed3072_o25/results.json` | 74% |
 | `td_gt_lewm_cube_seed3072_o25/results.json` | 72% |
@@ -71,6 +72,11 @@
 | `rf_manifold_prefix_successor_wm_cube_v1/evaluation/epoch_02_terminal_formal_o50/results.json` | 30% |
 | `rf_manifold_prefix_successor_wm_cube_head_refine_v1/evaluation/epoch_02_path_formal_o50/results.json` | 38% |
 | `rf_manifold_prefix_successor_wm_cube_head_refine_v1/evaluation/epoch_02_terminal_formal_o50/results.json` | 42% |
+
+Aligned 与 `lewm_seed3072_e10_matched_o50_retry` 使用完全相同的 50 个 episode 选择和相同
+的 O50 CEM 预算。配对计数为 both-success 26、Aligned-only 5、LeWM-only 1、neither 18；
+双侧 exact McNemar `p=0.21875`。详见
+[`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md)。
 
 ## 对应关系与解释边界
 
