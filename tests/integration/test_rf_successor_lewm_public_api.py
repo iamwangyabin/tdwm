@@ -35,7 +35,7 @@ class TinyPredictor(nn.Module):
         return embeddings + action_embeddings
 
 
-def test_public_lewm_rollout_drives_action_prefix_successor_cost():
+def test_public_lewm_0_1_1_rejects_missing_three_frame_planning_history():
     torch.manual_seed(5)
     embed_dim = 4
     action_dim = 2
@@ -63,11 +63,8 @@ def test_public_lewm_rollout_drives_action_prefix_successor_cost():
     }
     candidates = torch.randn(2, 3, 4, action_dim)
 
-    costs = method.get_cost(info, candidates)
-
-    assert costs.shape == (2, 3)
-    assert torch.isfinite(costs).all()
-    assert not hasattr(method, "get_action")
+    with pytest.raises(RuntimeError, match="expected 3 latent frames, found 1"):
+        method.get_cost(info, candidates)
 
 
 def test_joint_training_loss_backpropagates_through_public_lewm():

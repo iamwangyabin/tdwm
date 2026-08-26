@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from torch import nn
 
@@ -23,6 +24,7 @@ from tdwm.methods.successor_geometry import (
     successor_feature_basis,
 )
 from tdwm.training.rf_successor_lewm import (
+    _encode_online_and_target,
     build_multi_horizon_windows,
     load_rf_successor_training_protocol,
 )
@@ -156,9 +158,49 @@ def test_multi_horizon_windows_align_history_actions_and_targets():
     assert torch.equal(windows.history[-1, :, 0], torch.tensor([4.0, 5.0, 6.0]))
 
 
+class _MutatingEncoder(nn.Module):
+    def __init__(self, scale: float) -> None:
+        super().__init__()
+        self.action_scale = nn.Parameter(torch.tensor(scale))
+        self.last_input = None
+
+    def encode(self, info):
+        self.last_input = info
+        info["emb"] = info["pixels"] * self.action_scale
+        info["act_emb"] = info["action"] * self.action_scale
+        return info
+
+
+def test_online_and_target_encoders_cannot_overwrite_online_action_embeddings():
+    online = _MutatingEncoder(2.0)
+    target = _MutatingEncoder(7.0)
+    encoder_input = {
+        "pixels": torch.ones(1, 2, 1),
+        "action": torch.ones(1, 2, 1),
+    }
+
+    embeddings, action_embeddings, target_embeddings = _encode_online_and_target(
+        online,
+        target,
+        encoder_input,
+    )
+    (embeddings.sum() + action_embeddings.sum()).backward()
+
+    assert torch.equal(action_embeddings, torch.full_like(action_embeddings, 2.0))
+    assert torch.equal(target_embeddings, torch.full_like(target_embeddings, 7.0))
+    assert online.last_input is not target.last_input
+    assert online.last_input is not encoder_input
+    assert target.last_input is not encoder_input
+    assert "emb" not in encoder_input and "act_emb" not in encoder_input
+    assert online.action_scale.grad is not None
+    assert target.action_scale.grad is None
+
+
 def test_planner_queries_supplied_prefix_without_an_actor():
-    # One observed latent followed by two future latents.
-    predicted = torch.tensor([[[[0.0, 0.0], [1.0, 0.0], [4.0, 0.0]]]])
+    # Three observed latents followed by two future latents.
+    predicted = torch.tensor(
+        [[[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [4.0, 0.0]]]]
+    )
     successor = FixedSuccessor(
         torch.tensor([2.0, 0.0]), history_size=3, action_dim=1
     )
@@ -171,7 +213,7 @@ def test_planner_queries_supplied_prefix_without_an_actor():
         clamp_successor_cost=False,
     )
     info = {
-        "pixels": torch.zeros(1, 1, 1, 2),
+        "pixels": torch.zeros(1, 1, 3, 2),
         "goal_emb": torch.zeros(1, 1, 2),
     }
     actions = torch.zeros(1, 1, 2, 1)
@@ -181,6 +223,26 @@ def test_planner_queries_supplied_prefix_without_an_actor():
     # Successor point [2, 0] has mean squared cost 2; terminal [4, 0] has 8.
     assert torch.allclose(cost, torch.tensor([[6.0]]))
     assert not hasattr(adapter, "get_action")
+
+
+def test_planner_rejects_missing_history_instead_of_repeating_one_frame():
+    predicted = torch.zeros(1, 1, 3, 2)
+    successor = FixedSuccessor(
+        torch.tensor([0.0, 0.0]), history_size=3, action_dim=1
+    )
+    adapter = RewardFreeSuccessorLeWM(
+        FakeWorldModel(predicted),
+        successor,
+        max_horizon=2,
+        terminal_weight=0.5,
+    )
+    info = {
+        "pixels": torch.zeros(1, 1, 1, 2),
+        "goal_emb": torch.zeros(1, 1, 2),
+    }
+
+    with pytest.raises(RuntimeError, match="expected 3 latent frames, found 1"):
+        adapter.get_cost(info, torch.zeros(1, 1, 2, 1))
 
 
 def test_planner_can_query_the_terminal_predicted_moment():

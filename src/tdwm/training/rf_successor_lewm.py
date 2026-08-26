@@ -571,6 +571,21 @@ def ema_update_world_model(
             target_buffer.copy_(source_buffer)
 
 
+def _encode_online_and_target(
+    online_model: Any,
+    target_model: Any,
+    encoder_input: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Encode independent mappings so the target pass cannot overwrite online data."""
+
+    online = online_model.encode(dict(encoder_input))
+    online_embeddings = online["emb"]
+    online_action_embeddings = online["act_emb"]
+    with torch.no_grad():
+        target_embeddings = target_model.encode(dict(encoder_input))["emb"]
+    return online_embeddings, online_action_embeddings, target_embeddings
+
+
 def _build_joint_training_module(
     world_model: Any,
     protocol: dict[str, Any],
@@ -656,14 +671,16 @@ def _build_joint_training_module(
             pixels = self._preprocess(batch["pixels"])
             actions = torch.nan_to_num(batch["action"], 0.0)
             online_input = {**batch, "pixels": pixels, "action": actions}
-            online = self.model.encode(online_input)
-            embeddings = online["emb"]
+            embeddings, online_action_embeddings, target_embeddings = (
+                _encode_online_and_target(
+                    self.model,
+                    self.target_model,
+                    online_input,
+                )
+            )
             expected_steps = int(protocol["sequence"]["num_steps"])
             if embeddings.shape[1] != expected_steps:
                 raise RuntimeError("The encoded clip has an unexpected length.")
-
-            with torch.no_grad():
-                target_embeddings = self.target_model.encode(online_input)["emb"]
 
             local_count = embeddings.shape[1] - self.history_size
             local_histories = torch.cat(
@@ -675,7 +692,9 @@ def _build_joint_training_module(
             )
             local_actions = torch.cat(
                 [
-                    online["act_emb"][:, start : start + self.history_size]
+                    online_action_embeddings[
+                        :, start : start + self.history_size
+                    ]
                     for start in range(local_count)
                 ],
                 dim=0,

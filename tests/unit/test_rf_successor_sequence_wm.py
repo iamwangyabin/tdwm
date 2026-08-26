@@ -120,7 +120,7 @@ def test_s_only_planner_scores_prefix_without_world_model_rollout():
         terminal_weight=0.0,
     )
     info = {
-        "pixels": torch.randn(1, 4, 1, 2),
+        "pixels": torch.randn(1, 4, 3, 2),
         "goal_emb": torch.randn(1, 1, 2),
     }
     candidates = torch.randn(1, 4, 5, 1)

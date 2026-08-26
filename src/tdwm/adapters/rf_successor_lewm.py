@@ -179,7 +179,9 @@ class RewardFreeSuccessorLeWM(nn.Module):
             future = predicted[..., observed_frames:, :]
             if future.shape[-2] != horizon:
                 raise ValueError("LeWM rollout future does not match the plan horizon.")
-            history = self._pad_history(predicted[..., :observed_frames, :])
+            history = self._require_training_history(
+                predicted[..., :observed_frames, :]
+            )
         else:
             history = self._encoded_history_for_samples(
                 info_dict, batch=batch, samples=samples
@@ -278,19 +280,18 @@ class RewardFreeSuccessorLeWM(nn.Module):
         if encoded.shape[-1] != self.successor.embed_dim:
             raise ValueError("Encoded history and successor latent dimensions differ.")
         info["emb"] = encoded
-        return self._pad_history(encoded)
+        return self._require_training_history(encoded)
 
-    def _pad_history(self, history: torch.Tensor) -> torch.Tensor:
+    def _require_training_history(self, history: torch.Tensor) -> torch.Tensor:
         if history.shape[-1] != self.successor.embed_dim:
             raise ValueError("Unexpected latent history dimension.")
-        if history.shape[-2] >= self.history_size:
-            return history[..., -self.history_size :, :]
-        if history.shape[-2] <= 0:
-            raise ValueError("At least one observed latent is required.")
-        padding = history[..., :1, :].expand(
-            *history.shape[:-2], self.history_size - history.shape[-2], history.shape[-1]
-        )
-        return torch.cat((padding, history), dim=-2)
+        if history.shape[-2] != self.history_size:
+            raise RuntimeError(
+                "Planning history does not match training history: "
+                f"expected {self.history_size} latent frames, "
+                f"found {history.shape[-2]}."
+            )
+        return history
 
     def _goal_for_samples(
         self, info: dict[str, Any], *, batch: int, samples: int
