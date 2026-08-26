@@ -47,6 +47,7 @@ E2E 实验的配对统计和失败机制审计见
 | --- | ---: | ---: |
 | Aligned E2E MC-GT-LeWM，epoch 10 | **62%** | 332.36 s |
 | LeWM `lewm_seed3072_e10_matched_o50_retry` | 54% | 379.93 s |
+| RF-Successor-LeWM，epoch 10 | **32%** | 40.76 s |
 | Successor Geometry LeWM，epoch 3 | 46% | 422.45 s |
 | Policy-Auxiliary Successor Geometry，epoch 3 | 40% | 463.07 s |
 | Residual-Policy Successor Geometry，epoch 3 | 32% | 522.18 s |
@@ -134,7 +135,7 @@ Smoke 只有 1 episode，`0%` 或 `100%` 仅表示链路是否运行，不能解
 | 3090 Residual-Policy Successor Geometry | epoch 3，12,000 steps | 正式 O50 `32%` |
 | 3090 Aligned E2E MC-GT-LeWM | epoch 10，127,960 steps | 正式 O50 `62%`（31/50）；配对 LeWM `54%`（27/50） |
 | 3090 GT-LeWM v2 | epoch 10，127,960 steps | 训练完成；当前下载结果中没有对应正式 CEM `results.json` |
-| 3090 RF-Successor-LeWM | epoch 10，127,960 steps | 训练完成；当前下载结果中没有对应正式 CEM `results.json` |
+| 3090 RF-Successor-LeWM | epoch 10，127,960 steps | 正式 O50 `32%`（16/50，40.76 s） |
 
 ## 其他环境
 

@@ -9,7 +9,7 @@
   `.jsonl` 和 `.csv` 文件。
 - 本地原始轻量结果：
   `/Users/wangyabin/Documents/GitHub/tdwm/outputs/server_experiments/3090/outputs/`
-- 共 459 个文件、8,198,700 bytes：42 个日志、357 个 JSON、51 个 CSV、9 个 JSONL；
+- 共 462 个文件、约 8.25 MB：43 个日志、359 个 JSON、51 个 CSV、9 个 JSONL；
   JSON 全部解析通过。
 - 未下载 `.ckpt`、`.pt`、`.pth`、`.safetensors`、`.npz`、`.npy` 或任何
   `checkpoints/` 内容。原始结果目录被 Git 忽略，GitHub 只保存本索引。
@@ -24,7 +24,7 @@
 | `e2e_joint_td_gt_lewm_cube_full` | epoch 10，`global_step=127960` | O25 评测 `56%` |
 | `aligned_e2e_mc_gt_lewm_cube_full_v2` | epoch 10，`global_step=127960` | 正式 O50 评测 `62%`（31/50）；配对 LeWM 为 `54%`（27/50） |
 | `gt_lewm_cube_training_v2` | epoch 10，`global_step=127960` | 已保留训练 manifest、结果和 metrics |
-| `rf_successor_lewm_cube_v1` | epoch 10，`global_step=127960` | 已保留训练 manifest、结果和 metrics |
+| `rf_successor_lewm_cube_v1` | epoch 10，`global_step=127960` | 正式 O50 评测 `32%`（16/50）；已保留训练 manifest、结果和 metrics |
 | `successor_geometry_lewm_cube_seed399_v2` | epoch 3，`global_step=12000` | O50 评测 `46%`；world-only `40%` |
 | `policy_auxiliary_successor_geometry_lewm_cube_seed399_qtricks_v1` | epoch 3，`global_step=12000` | O50 评测 `40%` |
 | `residual_policy_successor_geometry_lewm_cube_seed399_qtricks_v1` | epoch 3，`global_step=12000` | O50 评测 `32%` |
@@ -44,6 +44,7 @@
 | `joint_td_gt_lewm_cube_seed3072_o25/results.json` | 62% |
 | `e2e_joint_td_gt_lewm_cube_seed3072_o25/results.json` | 56% |
 | `diagnostics/e2e_world_only_seed3072_epoch9_o25/results.json` | 62% |
+| `rf_successor_lewm_cube_v1/evaluation/epoch_10_formal_o50/results.json` | 32% |
 | `successor_geometry_lewm_cube_seed399_v2/evaluation_epoch03_o50/results.json` | 46% |
 | `successor_geometry_lewm_cube_seed399_v2/evaluation_epoch03_world_only_o50/results.json` | 40% |
 | `policy_auxiliary_successor_geometry_lewm_cube_seed399_qtricks_v1/evaluation_epoch03_o50/results.json` | 40% |
@@ -72,6 +73,14 @@
 | `rf_manifold_prefix_successor_wm_cube_v1/evaluation/epoch_02_terminal_formal_o50/results.json` | 30% |
 | `rf_manifold_prefix_successor_wm_cube_head_refine_v1/evaluation/epoch_02_path_formal_o50/results.json` | 38% |
 | `rf_manifold_prefix_successor_wm_cube_head_refine_v1/evaluation/epoch_02_terminal_formal_o50/results.json` | 42% |
+
+RF-Successor-LeWM epoch-10 的正式 O50 结果补跑记录：
+
+- 服务器结果：`/home/yabin/tdwm/outputs/rf_successor_lewm_cube_v1/evaluation/epoch_10_formal_o50/results.json`
+- 本地轻量副本（Git 忽略）：`/Users/wangyabin/Documents/GitHub/tdwm/outputs/server_experiments/3090/outputs/rf_successor_lewm_cube_v1/evaluation/epoch_10_formal_o50/results.json`
+- `results.json` SHA-256：`dfd3c9eef7b919b36f181defe46020165b0b2444cb07aa167d9d2f7c2793c58e`
+- `protocol_manifest.json` SHA-256：`60e53be5f996643e430a19d19c02748efd1c90610bd450e5212418f8dcfcb95a`
+- 运行时：NVIDIA GeForce RTX 3090、Python 3.11.15、PyTorch 2.13.0+cu130、`stable-worldmodel==0.1.1`、EGL 无头渲染；评测代码快照为提交 `1c932b2`。
 
 Aligned 与 `lewm_seed3072_e10_matched_o50_retry` 使用完全相同的 50 个 episode 选择和相同
 的 O50 CEM 预算。配对计数为 both-success 26、Aligned-only 5、LeWM-only 1、neither 18；
