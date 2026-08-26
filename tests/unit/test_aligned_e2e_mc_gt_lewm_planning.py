@@ -103,3 +103,25 @@ def test_aligned_evaluation_requires_goal_beyond_planning_horizon():
         assert "strictly beyond" in str(error)
     else:
         raise AssertionError("goal_offset equal to planning coverage must be rejected")
+
+
+def test_aligned_evaluation_validates_optional_planner_diagnostics():
+    with open(
+        "configs/experiment/aligned_e2e_mc_gt_lewm_cube_seed3072_o50.yaml"
+    ) as stream:
+        protocol = yaml.safe_load(stream)
+    protocol["planner_diagnostics"] = {
+        "enabled": True,
+        "record_iterations": [0, 29],
+        "epsilon": 1e-8,
+    }
+
+    validate_aligned_e2e_mc_gt_evaluation_protocol(protocol)
+
+    protocol["planner_diagnostics"]["record_iterations"] = [30]
+    try:
+        validate_aligned_e2e_mc_gt_evaluation_protocol(protocol)
+    except ValueError as error:
+        assert "within the CEM loop" in str(error)
+    else:
+        raise AssertionError("out-of-range diagnostic iterations must be rejected")

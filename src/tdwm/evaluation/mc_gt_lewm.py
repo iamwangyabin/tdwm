@@ -299,16 +299,22 @@ def _evaluate_goal_tail_lewm(
         ]
     )
     tail_cfg = protocol["tail_value"]
+    policy_kwargs = {
+        "world_model": model,
+        "value": value,
+        "planning": planning_cfg,
+        "history_size": tail_cfg["history_size"],
+        "action_block_dim": tail_cfg["action_block_dim"],
+        "tail_weight": tail_cfg["weight"],
+        "process": {"action": action_processor},
+        "transform": {"pixels": image_transform, "goal": image_transform},
+        "device": "cuda",
+    }
+    planner_diagnostics = protocol.get("planner_diagnostics")
+    if planner_diagnostics and planner_diagnostics.get("enabled") is True:
+        policy_kwargs["planner_diagnostics"] = planner_diagnostics
     policy = policy_builder(
-        world_model=model,
-        value=value,
-        planning=planning_cfg,
-        history_size=tail_cfg["history_size"],
-        action_block_dim=tail_cfg["action_block_dim"],
-        tail_weight=tail_cfg["weight"],
-        process={"action": action_processor},
-        transform={"pixels": image_transform, "goal": image_transform},
-        device="cuda",
+        **policy_kwargs,
     )
 
     runtime_manifest = {
@@ -389,6 +395,19 @@ def _evaluate_goal_tail_lewm(
     finally:
         world.close()
 
+    diagnostics_result = None
+    diagnostics_recorder = getattr(policy, "tdwm_planner_diagnostics", None)
+    if diagnostics_recorder is not None:
+        diagnostics_payload = diagnostics_recorder.export()
+        diagnostics_path = output_dir / "planner_diagnostics.json"
+        _write_json(diagnostics_path, diagnostics_payload)
+        diagnostics_result = {
+            "path": str(diagnostics_path),
+            "record_count": diagnostics_payload["record_count"],
+            "solve_count": diagnostics_payload["solve_count"],
+            "aggregates": diagnostics_payload["aggregates"],
+        }
+
     result = {
         "metrics": metrics,
         "elapsed_seconds": time.time() - started,
@@ -398,6 +417,8 @@ def _evaluate_goal_tail_lewm(
         "smoke": smoke,
         "protocol_manifest": str(output_dir / "protocol_manifest.json"),
     }
+    if diagnostics_result is not None:
+        result["planner_diagnostics"] = diagnostics_result
     _write_json(output_dir / "results.json", result)
     return _jsonable(result)
 

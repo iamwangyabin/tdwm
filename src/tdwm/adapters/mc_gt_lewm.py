@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ class MCGoalTailLeWM(nn.Module):
         history_size: int = 3,
         action_block_dim: int = 25,
         tail_weight: float = 1.0,
+        collect_planner_diagnostics: bool = False,
     ) -> None:
         super().__init__()
         if history_size <= 0:
@@ -44,6 +46,8 @@ class MCGoalTailLeWM(nn.Module):
         self.history_size = int(history_size)
         self.action_block_dim = int(action_block_dim)
         self.tail_weight = float(tail_weight)
+        self.collect_planner_diagnostics = bool(collect_planner_diagnostics)
+        self.last_cost_components: dict[str, torch.Tensor] | None = None
 
     def encode(self, info: dict[str, Any]) -> dict[str, Any]:
         return self.world_model.encode(info)
@@ -109,6 +113,20 @@ class MCGoalTailLeWM(nn.Module):
         goal = self._broadcast_goal(goal_embedding, predicted)
         tail_value = self.value(history, goal)
 
+        if self.collect_planner_diagnostics:
+            latent_dim = predicted.shape[-1]
+            normalized_terminal = original_cost / latent_dim
+            normalized_total = normalized_terminal + self.tail_weight * tail_value
+            components = {
+                "terminal_cost": normalized_terminal.detach(),
+                "tail_value": tail_value.detach(),
+                "total_cost": normalized_total.detach(),
+            }
+            if hasattr(self.value, "current_latent"):
+                current = self.value.current_latent(history)
+                components["boundary_value"] = self.value(history, current).detach()
+            self.last_cost_components = components
+
         # LeWM 0.1.1 sums terminal squared error over latent dimensions, while
         # MC-GT targets use the mean. Scaling V by D preserves the unchanged
         # upstream cost and is rank-equivalent to D * (c_mean + V).
@@ -145,6 +163,180 @@ class MCGoalTailLeWM(nn.Module):
         return goal.unsqueeze(1).expand(
             predicted.shape[0], predicted.shape[1], goal.shape[-1]
         )
+
+
+class GoalTailPlannerDiagnosticsRecorder:
+    """Record compact component and ranking statistics from public CEM callbacks."""
+
+    output_key = "tdwm_goal_tail_planner_diagnostics"
+
+    def __init__(
+        self,
+        model: MCGoalTailLeWM,
+        *,
+        record_iterations: list[int] | tuple[int, ...],
+        epsilon: float = 1e-8,
+    ) -> None:
+        if not record_iterations:
+            raise ValueError("record_iterations must not be empty.")
+        if epsilon <= 0.0:
+            raise ValueError("diagnostic epsilon must be positive.")
+        self.model = model
+        self.record_iterations = frozenset(int(step) for step in record_iterations)
+        self.epsilon = float(epsilon)
+        self.records: list[dict[str, float | int]] = []
+        self.history: list[list[dict[str, float | int]]] = []
+        self._current: list[dict[str, float | int]] = []
+        self.solve_index = -1
+        self.batch_index = -1
+
+    def reset(self) -> None:
+        self.solve_index += 1
+        self.batch_index = -1
+        self.history = []
+        self._current = []
+
+    def start_batch(self) -> None:
+        if self._current:
+            self.history.append(self._current)
+        self.batch_index += 1
+        self._current = []
+
+    def end_solve(self) -> None:
+        if self._current:
+            self.history.append(self._current)
+            self._current = []
+
+    def __call__(self, **state: Any) -> None:
+        step = int(state["step"])
+        if step not in self.record_iterations:
+            return
+        components = self.model.last_cost_components
+        if components is None:
+            raise RuntimeError("Goal-tail planner diagnostics have no cost components.")
+        record = self._build_record(
+            step=step,
+            terminal=components["terminal_cost"],
+            tail=components["tail_value"],
+            total=components["total_cost"],
+            topk_indices=state["topk_inds"],
+            boundary=components.get("boundary_value"),
+        )
+        self.records.append(record)
+        self._current.append(record)
+
+    def _build_record(
+        self,
+        *,
+        step: int,
+        terminal: torch.Tensor,
+        tail: torch.Tensor,
+        total: torch.Tensor,
+        topk_indices: torch.Tensor,
+        boundary: torch.Tensor | None,
+    ) -> dict[str, float | int]:
+        if terminal.shape != tail.shape or terminal.shape != total.shape:
+            raise RuntimeError("Planner diagnostic component shapes differ.")
+        if terminal.ndim != 2:
+            raise RuntimeError("Planner diagnostic costs must be batch by candidate.")
+        elite_mask = torch.zeros_like(total, dtype=torch.bool)
+        elite_mask.scatter_(1, topk_indices, True)
+        nonelite_mask = ~elite_mask
+        best_total = total.argmin(dim=1, keepdim=True)
+        selected_tail = tail.gather(1, best_total)
+        selected_terminal = terminal.gather(1, best_total)
+        selected_total = total.gather(1, best_total)
+        tail_percentile = (tail <= selected_tail).float().mean(dim=1) * 100.0
+        ratio = tail / terminal.abs().clamp_min(self.epsilon)
+        k = int(topk_indices.shape[1])
+        terminal_topk = terminal.topk(k, dim=1, largest=False).indices
+        topk_overlap = (
+            terminal_topk.unsqueeze(-1) == topk_indices.unsqueeze(-2)
+        ).any(dim=-1).float().mean()
+        record: dict[str, float | int] = {
+            "solve_index": self.solve_index,
+            "batch_index": self.batch_index,
+            "iteration": step,
+            "candidate_count": int(total.shape[1]),
+            "terminal_cost_mean": self._mean(terminal),
+            "terminal_cost_std": self._std(terminal),
+            "tail_value_mean": self._mean(tail),
+            "tail_value_std": self._std(tail),
+            "total_cost_mean": self._mean(total),
+            "candidate_cost_std": self._std(total),
+            "tail_to_terminal_ratio_mean": self._mean(ratio),
+            "elite_tail_mean": self._mean(tail[elite_mask]),
+            "nonelite_tail_mean": self._mean(tail[nonelite_mask]),
+            "terminal_total_rank_correlation": self._mean_rank_correlation(
+                terminal, total
+            ),
+            "tail_total_rank_correlation": self._mean_rank_correlation(tail, total),
+            "terminal_total_topk_overlap": float(topk_overlap.item()),
+            "best_candidate_changed_fraction": float(
+                (terminal.argmin(dim=1) != total.argmin(dim=1)).float().mean().item()
+            ),
+            "total_best_candidate_tail_percentile": self._mean(tail_percentile),
+            "selected_terminal_cost": self._mean(selected_terminal),
+            "selected_tail_value": self._mean(selected_tail),
+            "selected_total_cost": self._mean(selected_total),
+        }
+        if boundary is not None:
+            record["boundary_value_abs_mean"] = self._mean(boundary.abs())
+            record["boundary_value_abs_max"] = float(boundary.abs().max().item())
+        return record
+
+    @staticmethod
+    def _mean(value: torch.Tensor) -> float:
+        return float(value.float().mean().item())
+
+    @staticmethod
+    def _std(value: torch.Tensor) -> float:
+        return float(value.float().std(unbiased=False).item())
+
+    @staticmethod
+    def _mean_rank_correlation(left: torch.Tensor, right: torch.Tensor) -> float:
+        left_rank = left.argsort(dim=1).argsort(dim=1).float()
+        right_rank = right.argsort(dim=1).argsort(dim=1).float()
+        left_rank -= left_rank.mean(dim=1, keepdim=True)
+        right_rank -= right_rank.mean(dim=1, keepdim=True)
+        numerator = (left_rank * right_rank).sum(dim=1)
+        denominator = (
+            left_rank.square().sum(dim=1) * right_rank.square().sum(dim=1)
+        ).sqrt()
+        correlation = numerator / denominator.clamp_min(torch.finfo(torch.float32).eps)
+        return float(correlation.mean().item())
+
+    def export(self) -> dict[str, Any]:
+        numeric_keys = sorted(
+            {
+                key
+                for record in self.records
+                for key, value in record.items()
+                if isinstance(value, (int, float))
+                and key not in {"solve_index", "batch_index", "iteration"}
+            }
+        )
+        aggregates: dict[str, dict[str, float]] = {}
+        for key in numeric_keys:
+            values = [
+                float(record[key])
+                for record in self.records
+                if key in record and math.isfinite(float(record[key]))
+            ]
+            if values:
+                aggregates[key] = {
+                    "mean": sum(values) / len(values),
+                    "min": min(values),
+                    "max": max(values),
+                }
+        return {
+            "schema_version": 1,
+            "record_iterations": sorted(self.record_iterations),
+            "solve_count": self.solve_index + 1,
+            "record_count": len(self.records),
+            "aggregates": aggregates,
+            "records": self.records,
+        }
 
 
 def load_mc_goal_tail_value(
@@ -188,6 +380,7 @@ def make_mc_goal_tail_policy(
     process: dict[str, Any] | None = None,
     transform: dict[str, Any] | None = None,
     device: str | torch.device = "cpu",
+    planner_diagnostics: dict[str, Any] | None = None,
 ):
     """Build the unchanged upstream CEM policy around MC-GT-LeWM."""
 
@@ -199,9 +392,19 @@ def make_mc_goal_tail_policy(
         history_size=history_size,
         action_block_dim=action_block_dim,
         tail_weight=tail_weight,
+        collect_planner_diagnostics=planner_diagnostics is not None,
     ).to(device)
     wrapped.eval()
     wrapped.requires_grad_(False)
+    recorder = None
+    callbacks = None
+    if planner_diagnostics is not None:
+        recorder = GoalTailPlannerDiagnosticsRecorder(
+            wrapped,
+            record_iterations=planner_diagnostics["record_iterations"],
+            epsilon=float(planner_diagnostics.get("epsilon", 1e-8)),
+        )
+        callbacks = [recorder]
     solver = swm.solver.CEMSolver(
         model=wrapped,
         batch_size=planning["solver_batch_size"],
@@ -211,6 +414,7 @@ def make_mc_goal_tail_policy(
         topk=planning["elites"],
         device=device,
         seed=planning["planning_seed"],
+        callbacks=callbacks,
     )
     config = swm.PlanConfig(
         horizon=planning["horizon"],
@@ -219,9 +423,12 @@ def make_mc_goal_tail_policy(
         action_block=planning["action_block"],
         warm_start=planning["warm_start"],
     )
-    return swm.policy.WorldModelPolicy(
+    policy = swm.policy.WorldModelPolicy(
         solver=solver,
         config=config,
         process=process,
         transform=transform,
     )
+    if recorder is not None:
+        policy.tdwm_planner_diagnostics = recorder
+    return policy

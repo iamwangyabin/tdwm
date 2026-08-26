@@ -89,6 +89,25 @@ def validate_aligned_e2e_mc_gt_evaluation_protocol(
     if tail.get("upstream_scale_factor") != tail["latent_dim"]:
         raise ValueError("The tail must convert mean MC cost to upstream sum cost.")
 
+    diagnostics = protocol.get("planner_diagnostics")
+    if diagnostics is not None:
+        if not isinstance(diagnostics, dict) or diagnostics.get("enabled") is not True:
+            raise ValueError("Planner diagnostics must be an enabled mapping.")
+        iterations = diagnostics.get("record_iterations")
+        if (
+            not isinstance(iterations, list)
+            or not iterations
+            or any(
+                not isinstance(step, int)
+                or isinstance(step, bool)
+                or not 0 <= step < planning["iterations"]
+                for step in iterations
+            )
+        ):
+            raise ValueError("Diagnostic iterations must lie within the CEM loop.")
+        if float(diagnostics.get("epsilon", 1e-8)) <= 0.0:
+            raise ValueError("Planner diagnostic epsilon must be positive.")
+
 
 def _validate_aligned_checkpoint(
     payload: dict[str, Any],

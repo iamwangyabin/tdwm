@@ -6,7 +6,11 @@ import torch
 from torch import nn
 import yaml
 
-from tdwm.adapters.mc_gt_lewm import MCGoalTailLeWM, load_mc_goal_tail_value
+from tdwm.adapters.mc_gt_lewm import (
+    GoalTailPlannerDiagnosticsRecorder,
+    MCGoalTailLeWM,
+    load_mc_goal_tail_value,
+)
 from tdwm.evaluation.mc_gt_lewm import load_mc_gt_evaluation_protocol
 from tdwm.methods.goal_tail_value import GoalTailValue
 
@@ -77,6 +81,7 @@ def test_mc_goal_tail_cost_preserves_lewm_cost_and_uses_terminal_history():
         history_size=3,
         action_block_dim=2,
         tail_weight=1.0,
+        collect_planner_diagnostics=True,
     )
     info = {
         "goal": torch.zeros(1, 1, 1, 2),
@@ -92,6 +97,19 @@ def test_mc_goal_tail_cost_preserves_lewm_cost_and_uses_terminal_history():
     assert torch.equal(value.history[..., 6:], actions[..., -2:, :].flatten(-2))
     assert value.goal is not None
     assert torch.equal(value.goal, torch.zeros(1, 2, 2))
+    assert adapter.last_cost_components is not None
+    assert torch.equal(
+        adapter.last_cost_components["terminal_cost"],
+        torch.tensor([[2.5, 12.5]]),
+    )
+    assert torch.equal(
+        adapter.last_cost_components["tail_value"],
+        torch.tensor([[0.5, 1.5]]),
+    )
+    assert torch.equal(
+        adapter.last_cost_components["total_cost"],
+        torch.tensor([[3.0, 14.0]]),
+    )
 
 
 def test_zero_tail_exactly_recovers_upstream_lewm_cost():
@@ -118,6 +136,38 @@ def test_zero_tail_exactly_recovers_upstream_lewm_cost():
     )
 
     assert torch.equal(cost, expected)
+
+
+def test_planner_diagnostics_record_tail_reranking_without_changing_costs():
+    model = nn.Module()
+    model.last_cost_components = {
+        "terminal_cost": torch.tensor([[0.0, 1.0, 2.0]]),
+        "tail_value": torch.tensor([[2.0, 0.0, 1.0]]),
+        "total_cost": torch.tensor([[2.0, 1.0, 3.0]]),
+        "boundary_value": torch.zeros(1, 3),
+    }
+    recorder = GoalTailPlannerDiagnosticsRecorder(
+        model,
+        record_iterations=[0, 2],
+    )
+    recorder.reset()
+    recorder.start_batch()
+    recorder(
+        step=0,
+        topk_inds=torch.tensor([[1]]),
+    )
+    recorder(step=1, topk_inds=torch.tensor([[1]]))
+    recorder.end_solve()
+
+    exported = recorder.export()
+    record = exported["records"][0]
+    assert exported["record_count"] == 1
+    assert exported["solve_count"] == 1
+    assert record["best_candidate_changed_fraction"] == 1.0
+    assert record["terminal_total_topk_overlap"] == 0.0
+    assert record["elite_tail_mean"] == 0.0
+    assert record["nonelite_tail_mean"] == 1.5
+    assert record["boundary_value_abs_max"] == 0.0
 
 
 def test_mc_goal_tail_checkpoint_round_trip(tmp_path):
