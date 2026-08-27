@@ -12,6 +12,10 @@ checkpoints/
 models/
 runs/
 artifacts/
+!reports/artifacts/
+reports/artifacts/*
+!reports/artifacts/aligned_acd_o50_seed3072/
+!reports/artifacts/aligned_acd_o50_seed3072/**
 videos/
 wandb/
 lightning_logs/
