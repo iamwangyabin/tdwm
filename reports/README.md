@@ -7,10 +7,15 @@
 `outputs/server_experiments/`。下表中的 success rate 均来自实际 `results.json`，训练指标
 来自 `training_result.json`、metrics 或对应的详细报告。
 
+例外是经确认长期保存的轻量 A/C/D 结果归档
+[`artifacts/aligned_acd_o50_seed3072/`](artifacts/aligned_acd_o50_seed3072/README.md)：
+它只含 start/goal 索引、成功布尔值、哈希和 provenance，不含数据、模型或原始日志。
+
 ## 结论边界
 
-- 当前几乎所有控制结果都只有一个训练 seed 和一个 planning seed，不能声称任何方法
-  在统计意义上优于 baseline。
+- 当前几乎所有控制结果都只有一个训练 seed。Aligned A/C/D 已扩展到六个 matched
+  planning-selection seeds，但它们不是六个独立训练模型，不能据此声称方法在统计意义上
+  优于 baseline。
 - O25 与 O50 表示 start--goal offset，属于不同难度和 episode budget 的协议，不能横向
   排名。
 - 趋动云 LeWM 48% checkpoint 与 3090 LeWM 72% checkpoint 的训练数据读取、checkpoint
@@ -38,14 +43,35 @@ MC-GT-LeWM 相对配对 baseline 的变化只有 `+2` 个百分点，即净增 1
 E2E 实验的配对统计和失败机制审计见
 [`e2e_joint_td_gt_lewm_cube_seed3072.md`](e2e_joint_td_gt_lewm_cube_seed3072.md)。
 
-## Cube：O50 正式/主结果（3090，50 episodes）
+## Cube：O50 Aligned A/C/D 配对消融（一个 training seed）
+
+固定 training seed 3072，在 planning-selection seeds 42--47 上各运行 50 个 matched
+episodes：
+
+| Cell | 定义 | Success | 成功数 |
+| --- | --- | ---: | ---: |
+| A | Original LeWM world + terminal | 51.0% | 153/300 |
+| C | Aligned world + terminal | **56.0%** | **168/300** |
+| D | Aligned world + anchored tail | 55.67% | 167/300 |
+
+`C-A` 在 6/6 个 selections 中均为正，总差为 `+5.0 pp`；exact McNemar
+`p=0.02007`，作为三个平级 contrasts 之一的 Holm-adjusted `p=0.06022`。`D-C` 为
+`-0.33 pp`、exact `p=1.0`，即 tail 在 300 个 episode 中净少成功 1 个。当前证据支持
+“Aligned supervision 的主要观测价值来自训练后的 world model”，不支持
+“inference-time anchored tail 带来稳定总体增益”。完整报告和机器可读逐 episode 归档见
+[`aligned_acd_cube_o50_seed3072_planning_seeds42_47.md`](aligned_acd_cube_o50_seed3072_planning_seeds42_47.md)。
+
+真正的 `2x2` 设计仍缺 Original LeWM coordinates 中训练的 matched anchored tail（B）。
+跨坐标 B-prime 为 46%，只能诊断 latent-coordinate incompatibility，不能作为 B。
+
+## Cube：O50 历史/其他结果（多数为 50 episodes）
 
 以下运行都使用 goal offset 50，但方法、checkpoint、planner cost 和部分推理实现仍有差异；
 本表是完整结果索引，不是公平排行榜。
 
 | 运行 | Success | 耗时 |
 | --- | ---: | ---: |
-| Aligned E2E MC-GT-LeWM，epoch 10 | **62%** | 332.36 s |
+| Aligned E2E MC-GT-LeWM，epoch 10，planning seed 42（D） | **62%** | 332.36 s |
 | LeWM `lewm_seed3072_e10_matched_o50_retry` | 54% | 379.93 s |
 | RF-Successor-LeWM，epoch 10 | **32%** | 40.76 s |
 | Successor Geometry LeWM，epoch 3 | 46% | 422.45 s |
@@ -80,11 +106,11 @@ E2E 实验的配对统计和失败机制审计见
 `validation-fit hybrid` 等名称明确表示使用了 validation-fit/post-hoc 选择，不应与预先锁定
 的主方法结果混写。
 
-Aligned 与配对 LeWM 使用相同的 50 个 start--goal pair、planning seed 和 CEM 预算。Aligned
-为 31/50，LeWM 为 27/50，观测差为 `+8` 个百分点（净增 4 个成功 episode）；配对计数为
-both-success 26、Aligned-only 5、LeWM-only 1、neither 18，双侧 exact McNemar
-`p=0.21875`。这是单训练 seed 的正向观察，尚不能声称方法优于 baseline。完整协议和审计
-信息见 [`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md)。
+planning seed 42 的旧单次观察为 D `62%`、A `54%`，配对 exact McNemar
+`p=0.21875`；该事实保留在
+[`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md)。
+后续 300-episode 结果改变了核心解释：C 为 `56.0%`，A 为 `51.0%`，D 为
+`55.67%`，因此不能继续把 seed-42 的 `+8 pp` 归因于推理 tail。
 
 ## 3090 Pilot 与 Smoke 结果
 
@@ -133,7 +159,7 @@ Smoke 只有 1 episode，`0%` 或 `100%` 仅表示链路是否运行，不能解
 | 3090 Successor Geometry LeWM | epoch 3，12,000 steps | 正式 O50 `46%`；world-only `40%` |
 | 3090 Policy-Auxiliary Successor Geometry | epoch 3，12,000 steps | 正式 O50 `40%` |
 | 3090 Residual-Policy Successor Geometry | epoch 3，12,000 steps | 正式 O50 `32%` |
-| 3090 Aligned E2E MC-GT-LeWM | epoch 10，127,960 steps | 正式 O50 `62%`（31/50）；配对 LeWM `54%`（27/50） |
+| 3090 Aligned E2E MC-GT-LeWM | epoch 10，127,960 steps | seed-42 D `62%`；六组配对 selections 汇总 A/C/D=`51.0%/56.0%/55.67%` |
 | 3090 GT-LeWM v2 | epoch 10，127,960 steps | 训练完成；当前下载结果中没有对应正式 CEM `results.json` |
 | 3090 RF-Successor-LeWM | epoch 10，127,960 steps | 正式 O50 `32%`（16/50，40.76 s） |
 
@@ -175,6 +201,9 @@ loss `0.16631`、prediction loss `0.03154`、SIGReg `1.34375`；当时验证约�
 
 - [`server_3090_experiment_index.md`](server_3090_experiment_index.md)
 - [`server_experiment_index.md`](server_experiment_index.md)
+
+新的 A/C/D 结果未并入上述被忽略目录的历史文件计数；其 300-row、可提交轻量归档位于
+[`artifacts/aligned_acd_o50_seed3072/`](artifacts/aligned_acd_o50_seed3072/README.md)。
 
 <details>
 <summary>完整 training_result.json 索引（57 个）</summary>
@@ -261,7 +290,8 @@ loss `0.16631`、prediction loss `0.03154`、SIGReg `1.34375`；当时验证约�
 | [`mc_gt_lewm_cube_seed3072.md`](mc_gt_lewm_cube_seed3072.md) | MC-GT-LeWM 离线训练指标与审计信息 |
 | [`td_gt_lewm_cube_seed3072.md`](td_gt_lewm_cube_seed3072.md) | TD-GT-LeWM 离线训练指标与审计信息 |
 | [`e2e_joint_td_gt_lewm_cube_seed3072.md`](e2e_joint_td_gt_lewm_cube_seed3072.md) | E2E 负结果、配对统计和 formulation 偏差审计 |
-| [`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md) | Aligned E2E MC-GT-LeWM 正式 O50 结果、配对统计和复现信息 |
+| [`aligned_acd_cube_o50_seed3072_planning_seeds42_47.md`](aligned_acd_cube_o50_seed3072_planning_seeds42_47.md) | 六组 planning selections、300-episode A/C/D 消融和机器可读归档 |
+| [`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md) | planning seed 42 的单次 62%/54% 历史结果与复现信息 |
 | [`baseline_tdmpc2_cartpole.md`](baseline_tdmpc2_cartpole.md) | TD-MPC2 CartPole sparse/dense 诊断 |
 | [`baseline_lewm_pusht_training.md`](baseline_lewm_pusht_training.md) | 未完成的 PushT 过渡训练记录 |
 | [`server_experiment_index.md`](server_experiment_index.md) | 趋动云日志和轻量 artifact 索引 |
@@ -275,8 +305,9 @@ loss `0.16631`、prediction loss `0.03154`、SIGReg `1.34375`；当时验证约�
    TD-GT-LeWM 为 72%，没有观测提升。
 3. 第一版 E2E Joint TD-GT-LeWM 为 56%，且 world-only 已降至 62%；这是带明确协议偏差的
    负结果，不构成对修正 formulation 的最终证伪。
-4. 锁定协议的 Aligned E2E MC-GT-LeWM O50 为 62%，配对 LeWM 为 54%，观测差为
-   `+8` 个百分点；但 exact McNemar `p=0.21875`，且只有一个训练 seed，不能据此声称优越。
+4. 固定 training seed 3072 的六组 O50 paired selections 中，A/C/D 为
+   `51.0%/56.0%/55.67%`。`C-A` 在 6/6 selections 中为正，而 `D-C=-0.33 pp`；当前主要
+   观测增益来自 Aligned world-model training，inference-time tail 没有稳定总体收益。
 5. O50 successor 系列当前正式结果为 22%--56%，但存在协议、checkpoint、post-hoc 选择
    和实现差异，尚不能据此选出优于 LeWM 的方法。
 6. 项目仍缺少受控多 seed、统一 checkpoint、统一 planner 和锁定 episode split 的最终比较；

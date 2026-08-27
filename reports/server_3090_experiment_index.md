@@ -12,7 +12,8 @@
 - 共 462 个文件、约 8.25 MB：43 个日志、359 个 JSON、51 个 CSV、9 个 JSONL；
   JSON 全部解析通过。
 - 未下载 `.ckpt`、`.pt`、`.pth`、`.safetensors`、`.npz`、`.npy` 或任何
-  `checkpoints/` 内容。原始结果目录被 Git 忽略，GitHub 只保存本索引。
+  `checkpoints/` 内容。原始结果目录被 Git 忽略；GitHub 保存本索引，以及经确认归档的
+  A/C/D 逐 episode 布尔值、选择索引和哈希。
 
 ## 主要训练结果
 
@@ -22,7 +23,7 @@
 | `mc_gt_lewm_cube_full` | epoch 20，`global_step=4720` | validation MC MSE `0.00607095`；O25 评测 `74%` |
 | `td_gt_lewm_cube_full` | epoch 20，`global_step=4720` | validation MC MSE `0.00864504`；O25 评测 `72%` |
 | `e2e_joint_td_gt_lewm_cube_full` | epoch 10，`global_step=127960` | O25 评测 `56%` |
-| `aligned_e2e_mc_gt_lewm_cube_full_v2` | epoch 10，`global_step=127960` | 正式 O50 评测 `62%`（31/50）；配对 LeWM 为 `54%`（27/50） |
+| `aligned_e2e_mc_gt_lewm_cube_full_v2` | epoch 10，`global_step=127960` | seed-42 D `62%`；六组跨服务器配对 selections 汇总 A/C/D=`51.0%/56.0%/55.67%` |
 | `gt_lewm_cube_training_v2` | epoch 10，`global_step=127960` | 已保留训练 manifest、结果和 metrics |
 | `rf_successor_lewm_cube_v1` | epoch 10，`global_step=127960` | 正式 O50 评测 `32%`（16/50）；已保留训练 manifest、结果和 metrics |
 | `successor_geometry_lewm_cube_seed399_v2` | epoch 3，`global_step=12000` | O50 评测 `46%`；world-only `40%` |
@@ -38,7 +39,18 @@
 | --- | ---: |
 | `seed_3072_3090_episode_stream_formal/evaluation_o25/results.json` | 72% |
 | `aligned_e2e_mc_gt_lewm_cube_seed3072_epoch10_o50/results.json` | 62% |
+| `aligned_e2e_mc_gt_lewm_world_only_seed3072_epoch10_o50/results.json` | 56% |
 | `lewm_seed3072_e10_matched_o50_retry/results.json` | 54% |
+| `diagnostics/original_lewm_seed3072_epoch10_o50_planseed43/results.json` | 66% |
+| `diagnostics/aligned_world_only_seed3072_epoch10_o50_planseed43/results.json` | 74% |
+| `diagnostics/aligned_e2e_mc_gt_lewm_cube_seed3072_epoch10_o50_planseed43/results.json` | 70% |
+| `diagnostics/original_lewm_seed3072_epoch10_o50_planseed45/results.json` | 46% |
+| `diagnostics/aligned_world_only_seed3072_epoch10_o50_planseed45/results.json` | 54% |
+| `diagnostics/aligned_e2e_mc_gt_lewm_cube_seed3072_epoch10_o50_planseed45/results.json` | 52% |
+| `diagnostics/original_lewm_seed3072_epoch10_o50_planseed47/results.json` | 48% |
+| `diagnostics/aligned_world_only_seed3072_epoch10_o50_planseed47/results.json` | 54% |
+| `diagnostics/aligned_e2e_mc_gt_lewm_cube_seed3072_epoch10_o50_planseed47/results.json` | 46% |
+| `diagnostics/mc_gt_lewm_cube_seed3072_epoch20_o50_planseed42/results.json` | 52% |
 | `mc_gt_lewm_cube_seed3072_o25/results.json` | 74% |
 | `td_gt_lewm_cube_seed3072_o25/results.json` | 72% |
 | `joint_td_gt_lewm_cube_seed3072_o25/results.json` | 62% |
@@ -82,10 +94,16 @@ RF-Successor-LeWM epoch-10 的正式 O50 结果补跑记录：
 - `protocol_manifest.json` SHA-256：`60e53be5f996643e430a19d19c02748efd1c90610bd450e5212418f8dcfcb95a`
 - 运行时：NVIDIA GeForce RTX 3090、Python 3.11.15、PyTorch 2.13.0+cu130、`stable-worldmodel==0.1.1`、EGL 无头渲染；评测代码快照为提交 `1c932b2`。
 
-Aligned 与 `lewm_seed3072_e10_matched_o50_retry` 使用完全相同的 50 个 episode 选择和相同
-的 O50 CEM 预算。配对计数为 both-success 26、Aligned-only 5、LeWM-only 1、neither 18；
-双侧 exact McNemar `p=0.21875`。详见
-[`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md)。
+planning seed 42 上 Aligned D 与 `lewm_seed3072_e10_matched_o50_retry` 使用完全相同的
+50 个 episode 选择和 O50 CEM 预算，旧配对 exact McNemar 为 `p=0.21875`。该单次结果
+详见 [`aligned_e2e_mc_gt_lewm_cube_seed3072.md`](aligned_e2e_mc_gt_lewm_cube_seed3072.md)。
+
+后续 3090 承担 planning seeds 43、45、47，云端 RTX 4080 承担 44、46；连同 seed 42
+共形成 300 个 matched A/C/D episodes。汇总 A/C/D 为 `51.0%/56.0%/55.67%`，表明主要
+观测增益来自 Aligned world model，而不是 inference-time tail。逐 episode 结果、运行
+SHA-256 和跨服务器 provenance 见
+[`aligned_acd_cube_o50_seed3072_planning_seeds42_47.md`](aligned_acd_cube_o50_seed3072_planning_seeds42_47.md)
+及 [`artifacts/aligned_acd_o50_seed3072/`](artifacts/aligned_acd_o50_seed3072/README.md)。
 
 ## 对应关系与解释边界
 

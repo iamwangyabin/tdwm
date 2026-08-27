@@ -12,6 +12,14 @@ world model 提供稳定 target representation，value 架构严格保证
 `V(h, z_current) = 0`。锁定训练协议见
 [`configs/experiment/aligned_e2e_mc_gt_lewm_cube_train.yaml`](configs/experiment/aligned_e2e_mc_gt_lewm_cube_train.yaml)。
 
+最新 paired ablation 固定 training seed 3072，并在六组 matched planning selections、
+共 300 个 O50 episodes 上得到：Original LeWM world-only `51.0%`、Aligned world-only
+`56.0%`、Aligned world + anchored tail `55.67%`。当前观察到的增益主要来自 Aligned
+training 后的 world model，而不是 inference-time tail scoring；这些 planning-selection
+seeds 不是独立 training seeds，不能据此声称方法显著优于 baseline。完整逐 episode
+归档、Holm-corrected paired statistics 和 provenance 见
+[`reports/aligned_acd_cube_o50_seed3072_planning_seeds42_47.md`](reports/aligned_acd_cube_o50_seed3072_planning_seeds42_47.md)。
+
 第一版 **E2E Joint TD-GT-LeWM** 已完成单 seed 训练与 CEM 评测，但其相关窗口伪 batch、
 缺失零边界和 `o25` 评测没有严格实现预期 formulation。负结果与适用结论记录在
 [`reports/e2e_joint_td_gt_lewm_cube_seed3072.md`](reports/e2e_joint_td_gt_lewm_cube_seed3072.md)。

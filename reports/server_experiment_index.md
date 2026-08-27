@@ -1,6 +1,31 @@
 # 服务器实验产物索引
 
-记录日期：2026-08-26（Asia/Shanghai）
+首次记录：2026-08-26；最后更新：2026-08-27（Asia/Shanghai）
+
+## AutoDL 云端 RTX 4080：Aligned A/C/D 补充评测
+
+2026-08-27 的 paired ablation 使用代码目录 `/root/tdwm`、数据目录
+`/root/autodl-tmp/tdwm/data/lewm-cube/` 和结果目录
+`/root/autodl-tmp/tdwm/outputs/diagnostics/`。云端 RTX 4080 承担 planning-selection
+seeds 44、46；每个 seed 内 A/C/D 的 selection 文件完全一致。
+
+| Planning seed | A：Original terminal | C：Aligned terminal | D：Aligned + tail |
+| ---: | ---: | ---: | ---: |
+| 44 | 44% (22/50) | 46% (23/50) | 46% (23/50) |
+| 46 | 48% (24/50) | 52% (26/50) | 58% (29/50) |
+
+同一云端还运行了两个隔离诊断：
+
+- B-prime（Original world + Aligned-coordinate tail）：`46%`（23/50）。该组合存在
+  latent-coordinate mismatch，不能作为干净 factorial cell B。
+- Aligned planner O5：保留 124 条 iteration-0/29 诊断记录；terminal-total rank
+  correlation `0.92978`，最终 iteration 改变最佳 candidate `27.42%`，boundary maximum
+  为 `0.0`。O5 不用于 success-rate 声明。
+
+RTX 3090 承担 seeds 42、43、45、47。六组跨服务器汇总和逐 episode 机器可读归档见
+[`aligned_acd_cube_o50_seed3072_planning_seeds42_47.md`](aligned_acd_cube_o50_seed3072_planning_seeds42_47.md)
+及 [`artifacts/aligned_acd_o50_seed3072/`](artifacts/aligned_acd_o50_seed3072/README.md)。
+GitHub 只保存轻量 CSV/JSON 和哈希，不保存数据集、checkpoint 或原始日志。
 
 ## 范围与保存策略
 
@@ -15,7 +40,8 @@
 - `outputs/server_experiments/tdwm_successor/`
 
 本次本地下载目录中**没有 checkpoint 文件**（无 `.ckpt`、`.pt` 或 `.pth`）。原始大型
-产物不进入 GitHub；GitHub 只保存本索引和轻量汇总。
+产物不进入 GitHub；GitHub 保存本索引、轻量汇总，以及经确认归档的 A/C/D 选择索引、
+成功布尔值和哈希。
 
 ## 当前服务器保留的原始日志
 

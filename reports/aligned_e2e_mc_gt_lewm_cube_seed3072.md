@@ -6,6 +6,13 @@
 CEM 预算后的单训练 seed 正式评测。结果是一个正向观察，但不足以声称方法在统计意义上
 优于 baseline。
 
+> **后续解释更新：** 本报告只对应 planning seed 42 的单个 selection，保留其
+> `62%` 对 `54%` 的历史观察。后续六组 matched planning selections、300 个 paired
+> episodes 的 A/C/D 归档显示 Aligned world-only 为 `56.0%`，Original world-only 为
+> `51.0%`，加入 anchored tail 后为 `55.67%`；主要观测增益来自 world-model training，
+> inference-time tail 没有稳定总体收益。见
+> [`aligned_acd_cube_o50_seed3072_planning_seeds42_47.md`](aligned_acd_cube_o50_seed3072_planning_seeds42_47.md)。
+
 ## 核心结果
 
 | 方法 | 成功数 | success rate | 评测耗时 |
@@ -86,8 +93,8 @@ outputs/server_experiments/3090/outputs/aligned_e2e_mc_gt_lewm_cube_seed3072_epo
 | `protocol_manifest.json` | `75a71fab8dda309c449d7a52d579f77bf76ad83c07561f2c5f0fc107e1c9086a` |
 | `evaluation.log` | `3a6f90fcef335e32587ab9e25cd6549ad595182e0f532e29ef3ce38dd0c0f057` |
 
-checkpoint、原始日志和逐 episode 原始 artifact 不提交到 GitHub；GitHub 只保存锁定配置、
-测试和本轻量审计报告。
+checkpoint 和原始日志不提交到 GitHub。后续六组 A/C/D 归档只提交 episode/start/goal
+索引、成功布尔值、哈希和轻量 provenance，不包含图像、环境状态或模型参数。
 
 ## 结论边界与下一步
 
