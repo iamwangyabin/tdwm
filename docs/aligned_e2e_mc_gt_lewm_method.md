@@ -78,6 +78,171 @@ y_k = (1 - gamma) * sum_{j=1..k} gamma^(j-1) * d(z_{T+j}, z_{T+k})
 中的 behavior continuation。该 target 是直接的 supervised MC target，不使用 value
 bootstrap。
 
+## 4. 具体损失函数
+
+下面把代码中真正计算的 loss 写成公式。令：
+
+- `d = 192` 为 latent dimension；
+- `H = 3` 为 latent history 长度；
+- `R = 5` 为在线 LeWM rollout horizon；
+- `K = 16` 为 tail 的最大 goal offset；
+- \(d_{\rm lat}(u,v)=\frac{1}{d}\lVert u-v\rVert_2^2\) 为 latent 平均平方距离。
+
+### 4.1 LeWM 的短期 prediction loss
+
+对 world view 中的每个短 clip，在线 LeWM 编码得到真实 latent \(z\)，并根据历史和动作
+得到预测 latent \(\hat z\)。代码使用普通均方误差：
+
+\[
+\mathcal L_{\rm pred}
+ = \operatorname{mean}\left[(\hat z-z)^2\right].
+\]
+
+同时保留 stable-worldmodel 中的 SIGReg 表示正则：
+
+\[
+\mathcal L_{\rm world}
+ = \mathcal L_{\rm pred}
+ + 0.09\,\mathcal L_{\rm SIGReg}(z).
+\]
+
+这里的 `0.09`、17 个 knots、1024 个 projections 和 effective batch size 128 都来自
+正式配置；SIGReg 的具体投影计算由 `stable-worldmodel==0.1.1` 的公开 API 完成。
+
+### 4.2 MC tail target 的计算
+
+对 tail view，先用在线 LeWM 对前 \(R=5\) 个动作做可微 rollout，得到预测的末端 history
+\(\hat h_T\)。另外，EMA target world model 编码同一条离线序列，得到：
+
+\[
+\bar z_{T+1},\ldots,\bar z_{T+K}.
+\]
+
+第 \(k\) 个未来 goal 取为：
+
+\[
+g_k=\bar z_{T+k},\qquad k=1,\ldots,K.
+\]
+
+对应的直接 Monte-Carlo target 是：
+
+\[
+y_k
+ = (1-\gamma)\sum_{j=1}^{k}
+   \gamma^{j-1}
+   d_{\rm lat}(\bar z_{T+j},\bar z_{T+k}),
+\qquad \gamma=0.95.
+\]
+
+因此 \(y_1=0\)，而更远的 goal 会累积更多中间 future-latent 与最终 goal 的距离。这里
+没有 reward、TD bootstrap 或 beyond-clip 估计；所有 \(\bar z\) 和 \(y_k\) 都是
+stop-gradient 的 target。
+
+### 4.3 Boundary-anchored value 的计算
+
+tail head 先用一个共享的 scalar potential \(s_\psi(h,g)\)，再构造 value/cost：
+
+\[
+V_\psi(h,g)
+ = \left[s_\psi(h,g)-s_\psi(h,z_{\rm cur})\right]^2,
+\]
+
+其中 \(z_{\rm cur}\) 是 history 中最后一个 latent。因此：
+
+\[
+V_\psi(h,g)\ge 0,
+\qquad
+V_\psi(h,z_{\rm cur})=0
+\]
+
+在网络结构上严格成立。它不是给普通 MLP 再加一个软 boundary penalty。
+
+### 4.4 MC tail regression loss
+
+对 batch 中的每个样本 \(b\) 和全部 \(K=16\) 个 future offsets，代码计算：
+
+\[
+\mathcal L_{\rm tail}
+ = \frac{1}{BK}\sum_{b=1}^{B}\sum_{k=1}^{K}
+   \left[
+   V_\psi\left(\operatorname{GradScale}_{0.1}(\hat h_{T,b}),g_{b,k}\right)
+   -y_{b,k}
+   \right]^2.
+\]
+
+这里的 \(\operatorname{GradScale}_{0.1}\) 只把 tail loss 传回 online world model rollout 的梯度
+缩放为 0.1；tail value head 的参数梯度不缩放。也就是说，同一个 tail loss 同时训练 value
+head，并以较小梯度校准 LeWM 的长期 rollout。
+
+### 4.5 最终联合 loss
+
+训练时先计算 world loss，再计算 tail loss，最后联合为：
+
+\[
+\boxed{
+\mathcal L_{\rm joint}
+ = \mathcal L_{\rm world}
+ + \lambda_{\rm tail}\,w(t)\,\mathcal L_{\rm tail}
+}
+\]
+
+当前配置中：
+
+\[
+\lambda_{\rm tail}=1,
+\qquad
+w(t)=\min\left(1,\frac{t+1}{0.05\,T_{\rm train}}\right),
+\]
+
+即 tail loss 在训练前 5% 的 optimizer steps 内线性 warm up，之后权重为 1。两项 loss
+在同一个 optimizer update 中更新 online LeWM 和 value head；随后用：
+
+\[
+\bar\theta
+\leftarrow 0.995\,\bar\theta+0.005\,\theta
+\]
+
+更新 EMA target world model。梯度裁剪是优化步骤，不属于 loss 定义。
+
+## 5. 相关方法对比
+
+下面只列与当前 MC-GT-LeWM 直接相关的四个方法：
+
+| 方法 | World model 怎么来 | 长期 head / 训练目标 | planner cost | 核心区别 |
+| --- | --- | --- | --- | --- |
+| **Original LeWM** | 训练 LeWM | 无 tail；\(\mathcal L_{\rm world}\) | terminal latent-goal distance | 只有短期 latent prediction，作为 baseline |
+| **Frozen MC-GT-LeWM** | 加载并冻结已训练 LeWM，使用 latent cache | 普通 \(V_\psi(h,g)\)，直接拟合 \(\mathcal L_{\rm MC}=\operatorname{MSE}(V_\psi,y)\) | LeWM terminal cost + MC tail（设计上） | 只训练 value head，不会反过来改变 world model |
+| **E2E Joint TD-GT-LeWM** | 从原始图像随机初始化，联合训练 | 一步 TD：\(\mathcal L_{\rm TD}=\operatorname{MSE}(V_\psi, c_{t+1}+\gamma V_{\bar\psi})\) | terminal cost + TD tail | 已经 E2E，但依赖 bootstrap，旧实现没有结构化 exact-zero boundary |
+| **Aligned E2E MC-GT-LeWM** | 从原始图像随机初始化，联合训练 | 直接 MC 全 offset + EMA target + anchored \(V_\psi\)；\(\mathcal L_{\rm joint}\) 如上 | terminal cost + anchored MC tail | 当前方法：不用 TD bootstrap，并把 latent、rollout、目标和 boundary 对齐 |
+
+表中 TD 行的即时 cost 是
+
+\[
+c_{t+1}=(1-\gamma)d_{\rm lat}(z_{t+1},g),
+\]
+
+并在已经到达 goal 的 offset 上关闭 bootstrap：
+
+\[
+y_{\rm TD}=c_{t+1}+\gamma\,\mathbf 1[\Delta>1]\,
+V_{\bar\psi}(h_{t+1},g).
+\]
+
+### 这些差异意味着什么
+
+1. **Frozen vs E2E**：Frozen 版的 value 只能适应既有 latent；E2E 版的长期监督可以
+   改变 latent dynamics，使 representation 也考虑长期规划。
+2. **TD vs MC**：TD 用下一时刻 value bootstrap，误差会递推；当前方法直接用离线轨迹中
+   的 1--16 步 future latent 计算 target，代价是需要更长序列和更多编码计算。
+3. **普通 value vs anchored value**：普通 MLP 不保证到达当前 goal 时 cost 为 0；当前
+   的平方 potential 构造从数学上保证这个边界，同时保证 cost 非负。
+4. **真实 history vs predicted history**：当前 tail 不只在真实 latent history 上拟合，
+   而是输入在线 LeWM 5-step rollout 的 predicted terminal history，因此训练路径和测试
+   时 planner 的 imagined rollout 更一致。
+5. **推理时 tail 不等于训练收益**：tail 会改变 CEM candidate ranking，但当前 300 个
+   paired episodes 中，主要的稳定提升来自 Aligned world-model training；inference-time
+   tail 本身没有显示稳定的 success-rate 增益。
+
 ## “Aligned”具体对齐了什么
 
 它不是简单地在已经训练好的 LeWM 后面外挂一个 value head，而是同时处理以下对齐问题：
@@ -110,17 +275,6 @@ planning cost = terminal latent-goal distance
 
 当前 Cube 正式协议为 horizon 5、300 candidates、30 iterations、30 elites，每 5 个环境
 step 重规划。
-
-## 与冻结版 MC-GT-LeWM 的区别
-
-| 项目 | 冻结版 MC-GT-LeWM | Aligned E2E MC-GT-LeWM |
-| --- | --- | --- |
-| LeWM | 已训练并冻结 | 从随机初始化联合训练 |
-| 输入 | 缓存 latent | Cube 原始图像 |
-| tail target | 固定 world model latent | EMA world model latent |
-| tail 输入 | 主要是真实/缓存 latent history | online model rollout 的 predicted terminal history |
-| 零边界 | 普通 value 形式 | 结构化 exact zero boundary |
-| 训练关系 | 先后分离 | world loss 与 tail loss 同步更新 |
 
 ## 当前实验结果与证据边界
 
