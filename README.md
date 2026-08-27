@@ -154,3 +154,45 @@ python scripts/train.py --seed 3072 --resume never --max-steps 100 \
   --no-stride-aware-lance --no-device-image-preprocessing \
   --dataset "$TDWM_CUBE_DATASET" --output-dir "$run_dir"
 ```
+
+## PushT 离线 baseline 入口
+
+PR #1 的 PushT 训练适配已并入现有 Cube 研究入口，但使用独立的
+`src/tdwm/training/lewm_pusht.py` 模块，避免覆盖当前的 Cube LeWM 实现。LeWM、PLDM、
+DINO-WM、GCBC、GCIVL 和 GCIQL 均读取 `configs/envs/pusht.yaml` 及对应方法配置；
+TD-MPC2 仍保持 protocol-gated，不纳入这个 offline、reward-free 比较。
+
+在已解压的 PushT HDF5 数据集上运行单个方法：
+
+```bash
+python scripts/train.py \
+  --env pusht --method lewm --seed 3072 \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+```
+
+评测使用相同的 dataset-backed `world.evaluate(...)` 协议：
+
+```bash
+python scripts/evaluate.py \
+  --env pusht --method lewm \
+  --checkpoint lewm_pusht_seed3072_FINGERPRINT/weights_epoch_10.pt \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+```
+
+`scripts/launch_pusht_parallel.py` 可在 GPU 节点上按空闲显存排队运行其余五个
+baseline。当前 PushT 适配只记录 seed `3072` 的可复现实验入口，不据此作多 seed
+性能结论。
+
+## 可复现 GPU 容器
+
+根目录 `Dockerfile` 只接受平台提供的 CUDA base image；PyTorch、torchvision 和 CUDA
+不会被 TDWM 选择或升级。构建前会记录并在构建后校验加速器版本，同时安装精确的
+`stable-worldmodel[all]==0.1.1`：
+
+```bash
+docker build --build-arg BASE_IMAGE=your-existing-gpu-image:tag -t tdwm:runtime .
+```
+
+数据集、缓存和 checkpoint 应通过外部只读/持久化挂载提供，不进入镜像。

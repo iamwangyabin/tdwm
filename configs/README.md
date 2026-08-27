@@ -149,3 +149,25 @@ python scripts/convert_cube_lance.py \
 不符、图像质量不是 100、`action` 不是精确值，或 `observation` 不是源数据的确定性
 float32 转换时，Lance 数据会被拒绝。JPEG-100 保持图像分辨率，但不是逐像素无损，
 因此必须把这类运行标记为快速数据变体，并保证所有对比 seed 使用同一个转换结果。
+
+## PushT baseline 入口
+
+现有 Cube 训练/评测脚本保留原有参数形式。PushT baseline 使用 `--env` 和 `--method`
+形式，由同一入口分发到独立的 PushT 适配：
+
+```bash
+python scripts/train.py \
+  --env pusht --method lewm --seed 3072 \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+
+python scripts/evaluate.py \
+  --env pusht --method lewm \
+  --checkpoint lewm_pusht_seed3072_FINGERPRINT/weights_epoch_10.pt \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+```
+
+PushT 的训练适配覆盖 LeWM、PLDM、DINO-WM、GCBC、GCIVL 和 GCIQL；所有运行仍需
+固定数据集、episode split、seed、checkpoint 和原始逐 episode 结果。当前只验证
+seed `3072` 的入口，不能把单 seed 运行当作性能优于 baseline 的证据。

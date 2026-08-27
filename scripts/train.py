@@ -4,9 +4,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from tdwm.training import train_lewm
+
+PUSHT_METHODS = frozenset(
+    {"lewm", "pldm", "dino_wm", "gcbc", "gcivl", "gciql", "tdmpc2"}
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,6 +123,29 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Keep the established Cube CLI unchanged while exposing the PR's
+    # dataset-backed PushT adapters through the same script entry point.
+    if "--env" in sys.argv or "--method" in sys.argv:
+        from tdwm.training.lewm_pusht import build_parser
+
+        args = build_parser().parse_args()
+        if args.method == "lewm":
+            from tdwm.training.lewm_pusht import run
+
+            run(args)
+        elif args.method in PUSHT_METHODS - {"lewm", "tdmpc2"}:
+            from tdwm.training.baselines import run
+
+            run(args)
+        elif args.method == "tdmpc2":
+            raise RuntimeError(
+                "TD-MPC2 remains protocol-gated: it requires reward/Q training "
+                "and cannot be mixed into this offline PushT comparison."
+            )
+        else:
+            raise ValueError(f"Unknown method: {args.method}")
+        return
+
     args = parse_args()
     if not args.dataset:
         raise SystemExit("Pass --dataset or set TDWM_CUBE_DATASET.")

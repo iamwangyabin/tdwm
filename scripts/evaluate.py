@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from tdwm.evaluation import evaluate_official_lewm
@@ -43,6 +44,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # The existing argument set remains the Cube checkpoint evaluator. The
+    # --env/--method form is the shared PushT evaluator added by the PR.
+    if "--env" in sys.argv or "--method" in sys.argv:
+        from tdwm.evaluation.runner import main as shared_main
+
+        shared_main()
+        return
+
     args = parse_args()
     if not args.dataset:
         raise SystemExit("Pass --dataset or set TDWM_CUBE_DATASET.")

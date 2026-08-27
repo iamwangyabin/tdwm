@@ -47,11 +47,11 @@ evaluation:
     - method: _set_state
       args:
         state:
-          dataset_key: state
+          value: state
     - method: _set_goal_state
       args:
         goal_state:
-          dataset_key: goal_state
+          value: goal_state
 
 planning:
   solver: cem

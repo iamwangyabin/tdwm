@@ -1,0 +1,20 @@
+# TDWM container constraints.
+#
+# stable-worldmodel remains the single project dependency in pyproject.toml.
+# These constraints make its broad [all] extra reproducible. PyTorch,
+# torchvision, and CUDA are deliberately supplied by BASE_IMAGE.
+stable-worldmodel==0.1.1
+stable-pretraining==0.1.7
+
+lightning==2.4.0
+pytorch-lightning==2.4.0
+transformers==4.50.3
+datasets==2.20.0
+
+numpy==1.26.4
+pillow==11.3.0
+pyarrow==20.0.0
+scikit-learn==1.7.0
+
+lancedb==0.37.1
+pylance==10.0.0
