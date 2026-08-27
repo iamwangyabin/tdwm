@@ -1,0 +1,37 @@
+schema_version: 1
+id: joint_td_gt_lewm
+display_name: Joint TD-GT-LeWM
+full_name: Joint Model-Aware Temporal-Difference Goal-Tail LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  value: tdwm.methods.goal_tail_value.GoalTailValue
+
+representation:
+  initialization: reproduced_lewm_checkpoint
+  frozen_components: [encoder, projector]
+
+jointly_trained:
+  components: [predictor, action_encoder, pred_proj, goal_tail_value]
+  frozen_running_statistics: [pred_proj]
+  rollout_horizon: 5
+  tail_gradient_updates_dynamics: true
+  checkpoint: unified
+
+objective:
+  prediction: teacher_forced_lewm_mse
+  tail: one_step_td_on_predicted_terminal_history
+  gamma: 0.95
+  future_goal_offset: [1, 16]
+  target_network: true
+  target_ema_decay: 0.995
+  policy: false
+  successor: false
+
+inference:
+  objective: terminal_latent_goal_distance_plus_goal_tail_value
+  planner: unchanged_lewm_cem

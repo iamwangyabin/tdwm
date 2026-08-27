@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="从零理解 LS-LeWM：局部 LeWM 动力学、目标条件策略与 successor feature tail 的公式化讲解。">
+  <meta property="og:title" content="LS-LeWM 公式讲解">
+  <meta property="og:description" content="从图片、latent、目标距离到 CEM 规划，逐式解释 Local-Successor LeWM。">
+  <meta property="og:image" content="assets/og.png">
+  <title>LS-LeWM 公式讲解 | World Model Lab</title>
+  <link rel="stylesheet" href="ls-lewm.css">
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']],
+        tags: 'ams'
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="返回 World Model Lab">
+      <span class="brand-mark">LS</span>
+      <span>World Model Lab</span>
+    </a>
+    <nav class="top-nav" aria-label="页面目录">
+      <a href="#intuition">直觉</a>
+      <a href="#unified-theory">统一理论</a>
+      <a href="#symbols">符号</a>
+      <a href="#successor">Successor</a>
+      <a href="#training">训练</a>
+      <a href="#planning">规划</a>
+    </nav>
+    <a class="back-link" href="index.html">研究全景 <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <main>
+    <section class="hero" id="top">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">FROM PIXELS TO PLANNING</p>
+          <h1>LS-LeWM，<br><em>逐式</em>看懂它为什么这样设计</h1>
+          <p class="hero-lede">先用 LeWM 认真预测眼前几步，再用 successor feature 估计更远的长期代价。这个页面不假设你有强化学习基础，所有符号都会先解释“为什么需要”，再解释“公式在做什么”。</p>
+          <div class="hero-meta">
+            <span><b>01</b> 先建立直觉</span>
+            <span><b>02</b> 再看代数推导</span>
+            <span><b>03</b> 最后回到代码</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-label="LS-LeWM 规划结构示意">
+          <div class="visual-label">A CUBE TASK / MODEL PERSPECTIVE</div>
+          <img src="assets/cube.gif" alt="方块环境中的动作轨迹">
+          <div class="visual-flow">
+            <span>短期模型</span><i>+</i><span>长期 tail</span><strong>→</strong><span>目标</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-formula" aria-label="核心规划公式">
+        <span class="formula-tag">CORE IDEA</span>
+        <div class="display-math">\[
+          \boxed{
+            a^*_{t:t+H-1}
+            = \underset{a_{t:t+H-1}}{\arg\min}\;
+            J^{\mu_{a,\pi_\eta}}(h_t,z_g)
+          }
+        \]</div>
+        <p class="hero-formula-note">\(\mu_{a,\pi_\eta}\) 是一个组合控制器：前 (H) 步执行候选动作，之后由目标策略接着走。</p>
+      </div>
+    </section>
+
+    <section class="intro-band" id="intuition">
+      <div class="content-wide intro-grid">
+        <div>
+          <p class="eyebrow dark">先不要记公式</p>
+          <h2>一个目标，两种计算方式。</h2>
+        </div>
+        <div class="intro-text">
+          <p>机器人要从当前画面走到目标画面。它可以在脑中试很多条短路线，但模型越往未来预测越容易偏离现实。</p>
+          <p><strong>关键：</strong>短期和长期不是两套理论。它们都是同一个未来累计代价，只是前面几步用 LeWM 逐步计算，后面用 successor 更便宜地估计。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section unified-section" id="unified-theory">
+      <div class="content-wide">
+        <div class="section-head split-head">
+          <div>
+            <p class="eyebrow dark">01 / ONE THEORY</p>
+            <h2>真正统摄整个方法的，是一个未来总和。</h2>
+          </div>
+          <p class="section-lede">这里的 (\mu_{a,\pi_\eta}) 表示：先执行 CEM 提出的动作 prefix，之后交给目标条件策略继续执行。</p>
+        </div>
+        <div class="equation-block major-equation wide-equation">
+          <div class="equation-caption"><span>统一目标</span><span>不是两个 cost，而是一个 return</span></div>
+          <div class="display-math">\[
+            J^{\mu_{a,\pi_\eta}}(h_t,z_g)
+            =(1-\gamma)\,\mathbb{E}_{\mu_{a,\pi_\eta}}\!\left[
+              \sum_{k=0}^{\tau_g-t-1}
+              \gamma^k\,c(z_{t+k+1},z_g)
+              \ \middle|\ h_t,z_g
+            \right]
+          \]</div>
+          <p>它只说一件事：从现在开始，未来每一步离目标有多远，把这些距离按时间折扣后加起来。(c(z,z_g)=\lVert z-z_g\rVert_2^2/D)。</p>
+        </div>
+        <div class="distance-layout unified-split">
+          <div class="equation-block">
+            <div class="equation-caption"><span>同一个总和</span><span>只是从第 (H) 步切开</span></div>
+            <div class="display-math">\[
+              \sum_{k=0}^{\tau_g-t-1}\gamma^k c_{t+k+1}
+              =
+              \underbrace{\sum_{k=0}^{H-1}\gamma^k c_{t+k+1}}_{\text{前 }H\text{ 步}}
+              +
+              \underbrace{\sum_{k=H}^{\tau_g-t-1}\gamma^k c_{t+k+1}}_{\text{剩余未来}}
+            \]</div>
+          </div>
+          <div class="plain-callout unified-callout">
+            <strong>所以 short / long 的区别是什么？</strong>
+            <span>不是目标不同，而是计算器不同：前半段用 LeWM 展开每一步，后半段用 successor 一次性估计剩余总和。</span>
+          </div>
+        </div>
+        <div class="equation-block featured-equation unified-bellman">
+          <div class="equation-caption"><span>同一理论的递归写法</span><span>一步和多步可以互相转换</span></div>
+          <div class="display-math">\[
+            J^\pi(h_t,a_t,z_g)
+            =(1-\gamma)c(z_{t+1},z_g)
+            +\gamma(1-d_{t+1})
+            J^\pi\!\left(h_{t+1},\pi(h_{t+1},z_g),z_g\right)
+          \]</div>
+          <p>这就是 Bellman 递推：总未来代价 = 下一步代价 + 从下一步开始的剩余代价。successor 只是用向量 (G) 表示同一个 (J^\pi)：(J^\pi=w(z_g)^\top G^\pi)。</p>
+        </div>
+        <div class="next-step-block">
+          <div class="next-step-header">
+            <div>
+              <p class="eyebrow dark">一个容易误会的地方</p>
+              <h3>第一步不是更重要，只是当前决策的边界。</h3>
+            </div>
+            <p>公式把第一步写出来，是因为任何总和都可以写成“第一项 + 剩余项”。在 (t+1) 时刻，同一条规则会再次发生。</p>
+          </div>
+          <div class="three-meanings-grid">
+            <div class="meaning-item coral-meaning">
+              <span>01</span>
+              <h4>训练里的 one-step</h4>
+              <p>用相邻状态训练 (F(h_t,a_t)\to z_{t+1})，因为相邻监督最直接、最稳定。</p>
+            </div>
+            <div class="meaning-item blue-meaning">
+              <span>02</span>
+              <h4>规划里的多步</h4>
+              <p>LeWM 会把同一个局部模型重复使用 (H) 次，得到 (hat z_{t+1},\ldots,hat z_{t+H})。</p>
+            </div>
+            <div class="meaning-item yellow-meaning">
+              <span>03</span>
+              <h4>执行里的第一步</h4>
+              <p>真实环境只先执行 (a_t)，下一刻重新观察、重新规划；未来动作并没有被永久承诺。</p>
+            </div>
+          </div>
+          <div class="display-math next-step-equation">\[
+            J_t
+            = \underbrace{(1-\gamma)c_{t+1}}_{\text{当前这一步}}
+            +\gamma\,\underbrace{J_{t+1}}_{\text{后面所有步}}
+            \quad\Longrightarrow\quad
+            J_{t+1}=(1-\gamma)c_{t+2}+\gamma J_{t+2}
+          \]</div>
+          <p class="next-step-note">所以第一步只是递归展开时最靠前的一项；后面的每一步都使用同样的规则，并没有被认为“不重要”。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="problem">
+      <div class="content-wide">
+        <div class="section-head">
+          <p class="eyebrow dark">02 / PROBLEM SETUP</p>
+          <h2>先把任务说清楚：它到底在预测什么？</h2>
+          <p class="section-lede">每一条公式都来自一个具体需要。先从机器人看到什么、能做什么、想去哪里开始。</p>
+        </div>
+        <div class="setup-grid">
+          <article class="plain-panel accent-coral">
+            <span class="panel-number">A</span>
+            <h3>观测</h3>
+            <p>机器人在时间 (t) 看到一张图片，记作 (o_t)。它不是环境完整状态，只是当前能看到的信息。</p>
+            <div class="mini-formula">\(o_t = \text{当前图片}\)</div>
+          </article>
+          <article class="plain-panel accent-blue">
+            <span class="panel-number">B</span>
+            <h3>动作</h3>
+            <p>机器人选择动作 (a_t)，例如向左推、向右推或改变末端执行器的方向。</p>
+            <div class="mini-formula">\(a_t = \text{当前要执行的动作}\)</div>
+          </article>
+          <article class="plain-panel accent-yellow">
+            <span class="panel-number">C</span>
+            <h3>目标</h3>
+            <p>目标也可以由一张图片给出，记作 (o_g)。模型会把它变成目标 latent (z_g)。</p>
+            <div class="mini-formula">\(o_g \xrightarrow{\phi} z_g\)</div>
+          </article>
+        </div>
+        <div class="cause-effect">
+          <div class="cause-label">前因</div>
+          <p>像素太大、太细，而且无法直接告诉模型“什么变化对控制最重要”。</p>
+          <div class="cause-arrow" aria-hidden="true">↓</div>
+          <div class="effect-label">后果</div>
+          <p>先用 encoder 把图片压缩成控制用的 latent 表示。</p>
+        </div>
+        <div class="equation-block featured-equation">
+          <div class="equation-caption"><span>第一个桥梁</span><span>图片 → latent</span></div>
+          <div class="display-math">\[
+            z_t = \phi(o_t)
+          \]</div>
+          <p><code>\(\phi\)</code> 是 encoder。它的目标不是生成一个人能读懂的坐标系，而是学习一个对预测和控制有用的内部表示。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section tinted" id="symbols">
+      <div class="content-wide">
+        <div class="section-head">
+          <p class="eyebrow dark">03 / LOCAL DYNAMICS</p>
+          <h2>为什么要记住历史？</h2>
+          <p class="section-lede">同一张图片下，物体可能正在向左运动，也可能正在向右运动。当前画面不一定包含足够的速度信息。</p>
+        </div>
+        <div class="history-layout">
+          <div class="history-explainer">
+            <div class="history-snapshot"><span>过去</span><b>\(z_{t-2}\)</b><b>\(z_{t-1}\)</b><strong>\(z_t\)</strong><span>现在</span></div>
+            <div class="history-actions"><span></span><b>\(a_{t-2}\)</b><b>\(a_{t-1}\)</b><span>当前动作还没执行</span></div>
+            <p>历史动作告诉模型“我是怎么来到现在的”。这就是为什么 LeWM 的输入不是一个 latent，而是一段 history。</p>
+          </div>
+          <div class="equation-block dark-equation">
+            <div class="equation-caption"><span>历史上下文</span><span>LeWM 的状态</span></div>
+            <div class="display-math">\[
+              h_t = \left(z_{t-m+1:t},\ a_{t-m+1:t-1}\right),
+              \qquad z_t = \phi(o_t)
+            \]</div>
+            <p>当前配置 (m=3)，所以大致是最近三个 latent 加上最近两个历史动作。</p>
+          </div>
+        </div>
+        <div class="cause-effect horizontal">
+          <div><span class="cause-label">前因</span><p>模型需要知道当前动作会把系统推向哪里。</p></div>
+          <div class="cause-arrow" aria-hidden="true">→</div>
+          <div><span class="effect-label">公式</span><p>输入 history 和当前动作，预测下一步 latent。</p></div>
+        </div>
+        <div class="equation-block featured-equation">
+          <div class="equation-caption"><span>局部 world model</span><span>任意候选动作都可以问</span></div>
+          <div class="display-math">\[
+            \hat z_{t+1} = F(h_t, a_t)
+          \]</div>
+          <p>这条公式让 CEM 可以问模型：“如果我现在执行这个动作，下一步大概会到哪里？”</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="distance">
+      <div class="content-wide">
+        <div class="section-head split-head">
+          <div>
+            <p class="eyebrow dark">04 / GOAL DISTANCE</p>
+            <h2>没有奖励时，怎么定义“做得好”？</h2>
+          </div>
+          <p class="section-lede">当前方法使用 goal-reaching 代价：latent 离目标越近，代价越低。这里的“低”就是好。</p>
+        </div>
+        <div class="distance-layout">
+          <div class="equation-block major-equation">
+            <div class="equation-caption"><span>目标代价</span><span>cost 越小越好</span></div>
+            <div class="display-math">\[
+              c(z,z_g) = \frac{\lVert z-z_g\rVert_2^2}{D}
+            \]</div>
+            <div class="equation-notes">
+              <span><b>\(z\)</b> 当前状态的 latent</span>
+              <span><b>\(z_g\)</b> 目标状态的 latent</span>
+              <span><b>\(D\)</b> latent 维度，当前为 192</span>
+            </div>
+          </div>
+          <div class="numeric-example">
+            <p class="eyebrow dark">一个小例子</p>
+            <h3>把公式变成数字</h3>
+            <p>如果 (z=[1,2])，目标 (z_g=[3,5])，并且 (D=2)：</p>
+            <div class="display-math compact-math">\[
+              c(z,z_g) = \frac{(1-3)^2+(2-5)^2}{2}
+              = \frac{4+9}{2}=6.5
+            \]</div>
+            <p>如果机器人后来走到更接近目标的 latent，6.5 就会变小。</p>
+          </div>
+        </div>
+        <div class="plain-callout">
+          <strong>为什么不直接比较图片？</strong>
+          <span>像素距离容易被背景、光照和纹理影响。方法假设 encoder 学出的 latent 距离更接近控制任务真正关心的差异。</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section tinted" id="policy">
+      <div class="content-wide">
+        <div class="section-head">
+          <p class="eyebrow dark">05 / CONTINUATION POLICY</p>
+          <h2>长期动作从哪里来？</h2>
+          <p class="section-lede">如果让 LeWM 永远递归预测，误差会累积。于是方法另外学习一个“给定目标，下一步怎么走”的策略。</p>
+        </div>
+        <div class="policy-layout">
+          <div class="policy-story">
+            <div class="trajectory-strip">
+              <span>\(z_0\)</span><i>\(a_0\)</i><span>\(z_1\)</span><i>\(a_1\)</i><span>\(z_2\)</span><i>\(a_2\)</i><span class="goal-node">\(z_3\)</span>
+            </div>
+            <p>在离线轨迹中，未来状态可以事后充当目标。例如把 (z_2) 当作目标，就可以用真实动作 (a_0) 监督当前策略。</p>
+            <div class="hindsight-pair"><span>当前</span><b>\(z_0\)</b><span>目标</span><b>\(z_2\)</b><span>标签动作</span><strong>\(a_0\)</strong></div>
+          </div>
+          <div class="equation-block dark-equation">
+            <div class="equation-caption"><span>目标条件策略</span><span>policy 不是 world model</span></div>
+            <div class="display-math">\[
+              \pi_\eta(h_t,z_g) \approx a_t
+            \]</div>
+            <p>它学习的是“数据中通常如何朝未来目标走”，不是通过强化学习算出来的全局最优动作。</p>
+          </div>
+        </div>
+        <div class="cause-effect horizontal">
+          <div><span class="cause-label">为什么需要它</span><p>successor 需要知道长期应该按照什么行为继续。</p></div>
+          <div class="cause-arrow" aria-hidden="true">→</div>
+          <div><span class="effect-label">它提供什么</span><p>一个可执行、尽量接近离线数据分布的 continuation policy。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section successor-section" id="successor">
+      <div class="content-wide">
+        <div class="section-head split-head">
+          <div>
+            <p class="eyebrow dark">06 / SUCCESSOR FEATURES</p>
+            <h2>为什么 successor 输出一个向量，而不是一个数字？</h2>
+          </div>
+          <p class="section-lede">目标会变化。向量先总结“未来会访问什么”，目标权重再把它转换成“对这个目标有多远”。</p>
+        </div>
+        <div class="successor-steps">
+          <article class="formula-card">
+            <div class="card-index">A</div>
+            <h3>先把状态展开成 feature</h3>
+            <div class="display-math">\[
+              \chi(z)=\left[\frac{z}{\sqrt D},\ \frac{\lVert z\rVert_2^2}{D},\ 1\right]
+            \]</div>
+            <p>保留三类信息：latent 本身、latent 的平方大小、以及常数项。</p>
+          </article>
+          <article class="formula-card">
+            <div class="card-index">B</div>
+            <h3>目标生成一组权重</h3>
+            <div class="display-math">\[
+              w(z_g)=\left[-\frac{2z_g}{\sqrt D},\ 1,\ \frac{\lVert z_g\rVert_2^2}{D}\right]
+            \]</div>
+            <p>换一个目标，只需要换 (w(z_g))，不需要重新训练一个独立的 value 网络。</p>
+          </article>
+        </div>
+        <div class="derivation-block">
+          <div class="derivation-head"><span>代数检查</span><strong>为什么两者点乘正好是距离？</strong></div>
+          <div class="display-math">\[
+            \begin{aligned}
+              w(z_g)^\top\chi(z)
+              &= \left(-\frac{2z_g}{\sqrt D}\right)^\top\left(\frac{z}{\sqrt D}\right)
+                + \frac{\lVert z\rVert_2^2}{D}
+                + \frac{\lVert z_g\rVert_2^2}{D} \\
+              &= -\frac{2z_g^\top z}{D}
+                + \frac{\lVert z\rVert_2^2}{D}
+                + \frac{\lVert z_g\rVert_2^2}{D} \\
+              &= \frac{\lVert z-z_g\rVert_2^2}{D}
+            \end{aligned}
+          \]</div>
+          <p>最后一步只是平方展开式：(lVert z-z_gVert^2=lVert zVert^2-2z_g^	op z+lVert z_gVert^2)。所以这里不是经验近似，而是严格的代数恒等式。</p>
+        </div>
+        <div class="plain-callout coral-callout">
+          <strong>重要直觉</strong>
+          <span>successor 不直接回答“离某一个固定目标多远”，而是预测未来 feature 的累计；真正面对哪个目标，再用 (w(z_g)) 读出对应的距离。</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section tinted" id="successor-definition">
+      <div class="content-wide">
+        <div class="section-head">
+          <p class="eyebrow dark">07 / THE LONG-TERM OBJECT</p>
+          <h2>Successor 本身到底在预测什么？</h2>
+          <p class="section-lede">把“未来很多步的目标距离”拆成“未来很多步的 feature 访问记录”。</p>
+        </div>
+        <div class="equation-block major-equation wide-equation">
+          <div class="equation-caption"><span>向量 successor</span><span>当前动作之后交给目标策略</span></div>
+          <div class="display-math">\[
+            G^{\pi_g}(h_t,a_t,z_g)
+            =(1-\gamma)\,\mathbb{E}\!\left[
+              \sum_{k=0}^{\tau_g-t-1}\gamma^k\,\chi(z_{t+k+1})
+              \ \middle|\ h_t,a_t,\pi_g
+            \right]
+          \]</div>
+          <div class="definition-list">
+            <div><b>\(G\)</b><span>未来 feature 的折扣累计，当前为 (D+2=194) 维向量。</span></div>
+            <div><b>\(k=0\)</b><span>当前动作执行后的第一个状态是 (z_{t+1})，所以从 (t+1) 开始。</span></div>
+            <div><b>\(\gamma^k\)</b><span>未来越远，权重越小。当前配置是 (gamma=0.95)。</span></div>
+            <div><b>\(\tau_g\)</b><span>到达目标或 episode 终止的时间，终止后不再继续累加。</span></div>
+            <div><b>\(\mathbb{E}\)</b><span>如果未来有随机性，预测的是按照策略执行后的平均结果。</span></div>
+          </div>
+        </div>
+        <div class="readout-row">
+          <div class="readout-label">把向量读成目标代价</div>
+          <div class="display-math">\[
+            w(z_g)^\top G^{\pi_g}(h_t,a_t,z_g)
+            = \text{未来折扣目标距离}
+          \]</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="bellman">
+      <div class="content-wide">
+        <div class="section-head split-head">
+          <div>
+            <p class="eyebrow dark">08 / BELLMAN RECURSION</p>
+            <h2>为什么训练时可以只看一步？</h2>
+          </div>
+          <p class="section-lede">因为“未来总和”可以拆成“下一步 + 从下一步开始的剩余总和”。这就是 Bellman 递推。</p>
+        </div>
+        <div class="bellman-layout">
+          <div class="equation-block major-equation">
+            <div class="equation-caption"><span>一阶 TD 目标</span><span>online 学，EMA target 提供目标</span></div>
+            <div class="display-math">\[
+              \begin{aligned}
+                G(h_t,a_t,z_g)
+                &= (1-\gamma)\chi(z_{t+1}) \\
+                &\quad + \gamma(1-d_{t+1})\,
+                G_{\mathrm{ema}}\!\left(
+                  h_{t+1},\pi_{\mathrm{ema}}(h_{t+1},z_g),z_g
+                \right)
+              \end{aligned}
+            \]</div>
+          </div>
+          <div class="bellman-explainer">
+            <div class="bellman-line"><span class="dot coral"></span><p><strong>第一项：</strong>马上到达的下一状态 (z_{t+1}) 带来即时 feature。</p></div>
+            <div class="bellman-line"><span class="dot blue"></span><p><strong>第二项：</strong>从下一状态开始，按目标策略继续走的剩余结果。</p></div>
+            <div class="bellman-line"><span class="dot yellow"></span><p><strong>终止标记：</strong>如果 (d_{t+1}=1)，剩余项被乘成 0，不再 bootstrap。</p></div>
+          </div>
+        </div>
+        <details class="deep-dive">
+          <summary>展开：为什么要用 EMA target？</summary>
+          <div class="details-content">
+            <p>如果 online 网络既负责预测 (G)，又负责生成训练目标，那么它会一边追逐自己一边改变目标，训练容易抖动。于是保存一个变化较慢的 EMA 副本：</p>
+            <div class="display-math">\[
+              \theta_{\mathrm{target}}
+              \leftarrow
+              \rho\,\theta_{\mathrm{target}}
+              +(1-\rho)\,\theta_{\mathrm{online}}
+            \]</div>
+            <p>当前配置 (ho=0.995)。target 网络不通过这次 TD loss 反向传播，只负责提供相对稳定的参照。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section tinted" id="training">
+      <div class="content-wide">
+        <div class="section-head">
+          <p class="eyebrow dark">09 / TRAINING OBJECTIVE</p>
+          <h2>这些损失函数分别在教模型什么？</h2>
+          <p class="section-lede">LS-LeWM 不是只训练一个 head，而是让局部 world model、successor 和 continuation policy 共同工作。</p>
+        </div>
+        <div class="equation-block wide-equation">
+          <div class="equation-caption"><span>联合目标</span><span>每一项都有不同职责</span></div>
+          <div class="display-math">\[
+            \mathcal{L}
+            = \mathcal{L}_{\mathrm{local}}
+            + \beta\mathcal{L}_{\mathrm{SIGReg}}
+            + \lambda_G\left(
+              \mathcal{L}_{\mathrm{TD}}
+              +\lambda_b\mathcal{L}_{\mathrm{terminal}}
+            \right)
+            +\lambda_\pi\mathcal{L}_{\mathrm{BC}}
+          \]</div>
+        </div>
+        <div class="loss-grid">
+          <article class="loss-item"><span class="loss-symbol">\(\mathcal{L}_{\mathrm{local}}\)</span><h3>局部预测</h3><p>让 LeWM 的 (hat z_{t+1}) 接近真实 (z_{t+1})，保住短期动力学能力。</p></article>
+          <article class="loss-item"><span class="loss-symbol">\(\mathcal{L}_{\mathrm{SIGReg}}\)</span><h3>latent 正则</h3><p>沿用 LeWM 的表示约束，减少 latent 表示退化或塌缩。</p></article>
+          <article class="loss-item"><span class="loss-symbol">\(\mathcal{L}_{\mathrm{TD}}\)</span><h3>successor 递推</h3><p>让 online successor 接近 Bellman 目标，学会累计未来 feature。</p></article>
+          <article class="loss-item"><span class="loss-symbol">\(\mathcal{L}_{\mathrm{BC}}\)</span><h3>策略模仿</h3><p>让 (pi_eta(h_t,z_g)) 学习离线轨迹里的真实动作。</p></article>
+          <article class="loss-item"><span class="loss-symbol">\(\mathcal{L}_{\mathrm{terminal}}\)</span><h3>目标边界</h3><p>在已经到达目标的上下文里，要求 successor 接近零。</p></article>
+        </div>
+        <div class="sequence-block">
+          <div class="sequence-copy">
+            <p class="eyebrow dark">为什么训练序列是 19？</p>
+            <h3>history=3 时，最长可以看到 offset=16</h3>
+            <p>序列 (z_0,ldots,z_{18}) 中，第一段完整 history 从 (z_2) 开始。于是最远目标是 (z_{18})，offset 是 (18-2=16)。</p>
+          </div>
+          <div class="sequence-visual" aria-label="训练序列 offset 示意">
+            <div class="sequence-row"><span>\(z_0\)</span><span>\(z_1\)</span><b>\(z_2\)</b><span>\(z_3\)</span><span>\(z_4\)</span><span>⋯</span><strong>\(z_{18}\)</strong></div>
+            <div class="sequence-row small"><i>history</i><i>current</i><i>offset=1</i><i>offset=2</i><i>⋯</i><i>offset=16</i></div>
+          </div>
+        </div>
+        <details class="deep-dive">
+          <summary>展开：为什么要 uniform offset weighting？</summary>
+          <div class="details-content">
+            <p>offset=1 的训练 pair 最多，offset 越远，能构造的 pair 越少。如果把所有 pair 混合平均，短距离目标会淹没长距离目标。uniform offset weighting 的做法是先分别平均每个 offset 的 loss，再平均这些 offset。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section planning-section" id="planning">
+      <div class="content-wide">
+        <div class="section-head split-head">
+          <div>
+            <p class="eyebrow dark">10 / MPC INFERENCE</p>
+            <h2>最后回到规划：CEM 如何组合 prefix 和 tail？</h2>
+          </div>
+          <p class="section-lede">CEM 不需要知道 successor 的内部实现，只需要给它候选动作序列的最终代价。</p>
+        </div>
+        <div class="planning-flow">
+          <div class="flow-node coral-node"><span>输入</span><b>当前 history<br>+ 目标 (z_g)</b></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node blue-node"><span>候选 prefix</span><b>(a_t,ldots,a_{t+H-1})</b></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node green-node"><span>LeWM</span><b>预测 (H) 步 latent</b></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node yellow-node"><span>Successor</span><b>估计长期 tail</b></div>
+        </div>
+        <div class="equation-block major-equation wide-equation">
+          <div class="equation-caption"><span>LS-LeWM 的 MPC cost</span><span>prefix 和 tail 不重叠</span></div>
+          <div class="display-math">\[
+            \begin{aligned}
+              J_H
+              &=(1-\gamma)\sum_{k=1}^{H}\gamma^{k-1}
+                \frac{\lVert\hat z_{t+k}-z_g\rVert_2^2}{D} \\
+              &\quad+\gamma^H\,
+                w(z_g)^\top
+                G\!\left(
+                  \hat h_{t+H},
+                  \pi(\hat h_{t+H},z_g),
+                  z_g
+                \right)
+            \end{aligned}
+          \]</div>
+          <div class="equation-notes two-col">
+            <span><b>第一行</b> CEM 候选动作造成的短期显式路径代价。</span>
+            <span><b>第二行</b> prefix 结束后，按 policy 继续执行的长期估计。</span>
+          </div>
+        </div>
+        <div class="cem-grid">
+          <div class="cem-step"><b>1</b><span>采样很多候选动作序列</span></div>
+          <div class="cem-step"><b>2</b><span>用上式计算每条序列的 (J_H)</span></div>
+          <div class="cem-step"><b>3</b><span>保留 cost 最小的 elite</span></div>
+          <div class="cem-step"><b>4</b><span>更新动作分布并重复</span></div>
+          <div class="cem-step final-step"><b>5</b><span>只执行第一步，然后重新规划</span></div>
+        </div>
+        <div class="numeric-callout">
+          <div><span class="eyebrow dark">当前配置的尺度</span><strong>\(H=5,\quad \gamma=0.95\)</strong></div>
+          <p>五步 prefix 之后的 tail 权重是 (gamma^5\approx0.774)。所以 tail 不是装饰，它承担了相当一部分长期判断。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section tinted" id="audit">
+      <div class="content-wide">
+        <div class="section-head">
+          <p class="eyebrow dark">11 / WHAT TO CHECK</p>
+          <h2>公式闭合，不等于实验已经证明有效</h2>
+          <p class="section-lede">数学告诉我们这个方法想表达什么；实验还要检查它是否在真实的模型误差、数据分布和终止语义下成立。</p>
+        </div>
+        <div class="audit-list">
+          <div class="audit-item"><span>01</span><div><h3>终止语义</h3><p>训练中到达目标后停止 bootstrap，规划中的 prefix 是否也在同一个时刻停止累计，需要保持一致。</p></div></div>
+          <div class="audit-item"><span>02</span><div><h3>history 对齐</h3><p>successor 训练使用的历史长度和评估时 padding 出来的历史是否分布一致。</p></div></div>
+          <div class="audit-item"><span>03</span><div><h3>imagined latent</h3><p>训练时大量使用真实 latent，推理 tail 接收 LeWM 预测 latent，二者的差异需要通过 smoke 和消融实验量化。</p></div></div>
+          <div class="audit-item"><span>04</span><div><h3>公平消融</h3><p>至少比较原始 LeWM、dense prefix、successor tail、policy warm start 和完整 LS-LeWM，才能知道提升来自哪里。</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing" id="summary">
+      <div class="content-wide closing-inner">
+        <div>
+          <p class="eyebrow">ONE SENTENCE TO KEEP</p>
+          <h2>短期让模型想象，长期让 successor 总结。</h2>
+        </div>
+        <div class="closing-formula">\[
+          \boxed{\text{short-horizon dynamics} + \text{long-horizon successor tail}}
+        \]</div>
+        <p class="closing-note">建议阅读顺序：先看“问题设定”，再看“目标距离”，然后逐行展开 successor 的代数恒等式，最后回到 MPC cost。这样每条公式都能找到它出现的前因和后果。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="content-wide footer-inner">
+      <span>LS-LeWM / Local-Successor LeWM</span>
+      <a href="index.html">返回 TDWM 研究全景 <span aria-hidden="true">↗</span></a>
+    </div>
+  </footer>
+
+  <script src="ls-lewm.js"></script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+schema_version: 1
+id: rf_frozen_manifold_prefix_successor_wm_cube_terminal_o50
+method: rf_frozen_manifold_prefix_successor_wm
+display_name: Frozen-Geometry Manifold Prefix WM (Terminal Query)
+environment: cube
+stage: planner_evaluation
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+  precision: fp32
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+dataset:
+  identifier: quentinll/lewm-cube
+  file: ogbench/cube_single_expert.h5
+  expected_size_bytes: 101942558720
+  accepted_size_bytes: [101942558720, 74104077358]
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  episode_steps: 201
+  lance:
+    manifest_suffix: .manifest.json
+    image_codec: jpeg
+    jpeg_quality: 100
+  keys_to_load:
+    - pixels
+    - action
+    - qpos
+    - qvel
+    - privileged_block_0_pos
+    - privileged_block_0_quat
+
+checkpoint:
+  source: paired_local_rf_frozen_manifold_prefix_successor_export
+  base_checkpoint_path: required_cli_argument
+  successor_checkpoint_path: required_cli_argument
+
+model:
+  embed_dim: 192
+
+successor:
+  objective_version: 9
+  architecture: causal_transformer_manifold_successor
+  history_size: 3
+  prefix_depth: 3
+  prefix_heads: 6
+  prefix_mlp_dim: 768
+  predictor_depth: 6
+  predictor_mlp_dim: 2048
+  fusion_dim: 768
+  dropout: 0.1
+  max_horizon: 5
+  gamma: 0.95
+  feature_basis: augmented_latent_squared_distance
+  horizon_normalization: discounted_prefix_mean
+  target: frozen_pretrained_latents
+  pretrained_world_model_sha256: 0ce38860a672c4a304d6921c6f07158977bb1d2c8f0eed8a002bb7c89502b579
+  latent_recovery: direct_manifold_latents
+  action_conditioning: causal_prefix
+  goal_conditioning: none
+  continuation_policy: none
+  td_bootstrap: false
+  planning_weight: 1.0
+  terminal_weight: 0.0
+  clamp_successor_cost: true
+  planning_query: terminal_moment
+
+world:
+  env_name: swm/OGBCube-v0
+  env_type: single
+  ob_type: states
+  image_size: 224
+  multiview: false
+  visualize_info: false
+  terminate_at_goal: true
+  success_threshold_meters: 0.04
+
+evaluation:
+  episodes: 50
+  goal_offset: 50
+  start_goal_source: same_dataset_episode
+
+planning:
+  solver: CEM
+  horizon: 5
+  candidates: 300
+  iterations: 30
+  elites: 30
+  initial_variance: 1.0
+  action_block: 5
+  frame_skip: 5
+  receding_horizon: 1
+  episode_budget: 100
+  planning_seed: 42
+  solver_batch_size: 1
+  history_len: 1
+  warm_start: true
+  initial_distribution: cem_gaussian_no_actor
+
+inference_objective:
+  input: explicit_cem_action_prefix
+  score: terminal_predicted_latent_goal_cost
+  autoregressive_rollout: disabled
+  learned_action_policy: false
+  training_loss_space: future_latents
+
+provenance:
+  training_protocol: configs/experiment/rf_frozen_manifold_prefix_successor_wm_cube_train.yaml
+  comparison_protocol: configs/experiment/rf_frozen_manifold_prefix_successor_wm_cube_checkpoint_o50.yaml
+  status: controlled_checkpoint_query

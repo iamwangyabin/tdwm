@@ -1,0 +1,151 @@
+{
+  "all_record_aggregates": {
+    "best_candidate_changed_fraction": {
+      "max": 1.0,
+      "mean": 0.43548387096774194,
+      "min": 0.0
+    },
+    "boundary_value_abs_max": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0
+    },
+    "boundary_value_abs_mean": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0
+    },
+    "candidate_cost_std": {
+      "max": 0.6163918375968933,
+      "mean": 0.19328477920123166,
+      "min": 0.01099284179508686
+    },
+    "candidate_count": {
+      "max": 300.0,
+      "mean": 300.0,
+      "min": 300.0
+    },
+    "elite_tail_mean": {
+      "max": 0.5312916040420532,
+      "mean": 0.1271803249152189,
+      "min": 5.9899906773352996e-05
+    },
+    "nonelite_tail_mean": {
+      "max": 0.8796054720878601,
+      "mean": 0.2388297379738135,
+      "min": 0.00021930078219156712
+    },
+    "selected_tail_value": {
+      "max": 0.5155305862426758,
+      "mean": 0.06531817051297785,
+      "min": 6.257962468225742e-07
+    },
+    "selected_terminal_cost": {
+      "max": 1.4838027954101562,
+      "mean": 0.20049874388402508,
+      "min": 0.012309117242693901
+    },
+    "selected_total_cost": {
+      "max": 1.7014994621276855,
+      "mean": 0.2658169146011313,
+      "min": 0.012309743091464043
+    },
+    "tail_to_terminal_ratio_mean": {
+      "max": 1.529043197631836,
+      "mean": 0.35703959752384934,
+      "min": 0.005168654024600983
+    },
+    "tail_total_rank_correlation": {
+      "max": 0.8847449421882629,
+      "mean": 0.5015251077861795,
+      "min": -0.01235213689506054
+    },
+    "tail_value_mean": {
+      "max": 0.8350359201431274,
+      "mean": 0.22766480567295203,
+      "min": 0.00021107157226651907
+    },
+    "tail_value_std": {
+      "max": 0.29839274287223816,
+      "mean": 0.07467165412550282,
+      "min": 0.0003272469330113381
+    },
+    "terminal_cost_mean": {
+      "max": 1.989936351776123,
+      "mean": 0.46751883208391165,
+      "min": 0.03203599154949188
+    },
+    "terminal_cost_std": {
+      "max": 0.44869112968444824,
+      "mean": 0.1520268053958012,
+      "min": 0.010360880754888058
+    },
+    "terminal_total_rank_correlation": {
+      "max": 0.9998884201049805,
+      "mean": 0.9297832899516628,
+      "min": 0.4851831793785095
+    },
+    "terminal_total_topk_overlap": {
+      "max": 1.0,
+      "mean": 0.7521505783642491,
+      "min": 0.23333334922790527
+    },
+    "total_best_candidate_tail_percentile": {
+      "max": 72.33333587646484,
+      "mean": 15.163978927077785,
+      "min": 0.3333333432674408
+    },
+    "total_cost_mean": {
+      "max": 2.352180242538452,
+      "mean": 0.6951836468651891,
+      "min": 0.03283924609422684
+    }
+  },
+  "by_iteration": {
+    "0": {
+      "best_candidate_changed_fraction": 0.5967741935483871,
+      "boundary_value_abs_max": 0.0,
+      "candidate_cost_std": 0.34505548977082773,
+      "record_count": 62,
+      "tail_to_terminal_ratio_mean": 0.6515534145216788,
+      "tail_total_rank_correlation": 0.6580500790188389,
+      "terminal_total_rank_correlation": 0.8859045947751691,
+      "terminal_total_topk_overlap": 0.6505376739848044,
+      "total_best_candidate_tail_percentile": 5.376344235674027
+    },
+    "29": {
+      "best_candidate_changed_fraction": 0.27419354838709675,
+      "boundary_value_abs_max": 0.0,
+      "candidate_cost_std": 0.04151406863163556,
+      "record_count": 62,
+      "tail_to_terminal_ratio_mean": 0.06252578052601987,
+      "tail_total_rank_correlation": 0.34500013655352013,
+      "terminal_total_rank_correlation": 0.9736619851281566,
+      "terminal_total_topk_overlap": 0.853763482743694,
+      "total_best_candidate_tail_percentile": 24.951613618481545
+    }
+  },
+  "headline": {
+    "boundary_value_abs_max": 0.0,
+    "final_iteration_best_candidate_changed_fraction": 0.27419354838709675,
+    "tail_to_terminal_ratio_mean": 0.35703959752384934,
+    "terminal_total_rank_correlation_mean": 0.9297832899516628
+  },
+  "missing_diagnostic": "Candidate-level predicted cost versus executed counterfactual rollout outcome correlation was not collected in this run.",
+  "schema_version": 1,
+  "scope": {
+    "episodes": 5,
+    "performance_interpretation": "O5 is a mechanism diagnostic and is not used for success-rate claims.",
+    "record_count": 124,
+    "record_iterations": [
+      0,
+      29
+    ],
+    "solve_count": 20
+  },
+  "source": {
+    "planner_diagnostics_json_sha256": "179b8376a8fab923914434fb32616a390f7b867b44713e59bc07dd04d67b2999",
+    "protocol_manifest_json_sha256": "67fa73feb40d45748599265db4a671aa6777fa21c94472516589d55247c94dc8",
+    "results_json_sha256": "d6cf47c154951c9ea49995830c6541180fd6e1e01a4c8bb7a40ed3ba46924a00"
+  }
+}

@@ -1,0 +1,54 @@
+schema_version: 1
+id: rf_successor_lewm
+display_name: Reward-Free Successor LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  successor_head: tdwm.methods.rf_successor_lewm.ActionPrefixSuccessorHead
+  adapter: tdwm.adapters.rf_successor_lewm.RewardFreeSuccessorLeWM
+
+input:
+  history: latent_observation_history
+  action: externally_supplied_candidate_prefix
+  goal_during_training: false
+  reward_during_training: false
+
+model:
+  latent_rollout:
+    type: differentiable_open_loop_lewm
+    output: every_future_latent_from_1_to_K
+  successor:
+    type: causal_action_prefix_moments
+    output: every_finite_horizon_successor_from_1_to_K
+    feature_basis: augmented_latent_squared_distance
+    horizon_normalization: discounted_prefix_mean
+  action_policy:
+    present: false
+
+targets:
+  latent: ema_encoder_future_latents
+  successor: direct_monte_carlo_prefixes_of_ema_latents
+  td_bootstrap: false
+
+loss:
+  - local_lewm_prediction_mse
+  - multi_horizon_open_loop_latent_mse
+  - multi_horizon_direct_successor_mse
+  - successor_latent_increment_consistency
+  - sigreg
+
+inference:
+  goal_query: linear_projection_of_successor_moments
+  action_selection: stable_worldmodel_cem_mpc
+  learned_policy: false
+
+scope:
+  supported_zero_shot_query: squared_distance_to_any_encoded_goal
+  arbitrary_reward_zero_shot_rl: false
+
+provenance:
+  note: This is independent of LS-LeWM. It removes its goal-conditioned policy, TD bootstrap, and policy-tail splice.

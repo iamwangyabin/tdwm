@@ -1,0 +1,35 @@
+schema_version: 1
+id: successor_geometry_lewm
+display_name: Directed Successor-Geometry LeWM
+family: reward_free_world_model
+
+components:
+  world_model: stable_worldmodel.wm.lewm.LeWM
+  geometry: tdwm.methods.successor_geometry_lewm.DirectedSuccessorGeometry
+  adapter: tdwm.adapters.successor_geometry_lewm.SuccessorGeometryLeWM
+
+training:
+  initialization: random_from_scratch
+  end_to_end: true
+  staged_training: false
+  frozen_teacher: false
+  reward: none
+  goal_conditioning: none
+  learned_policy: none
+  td_bootstrap: false
+  dynamics: open_loop_latent_mse_h1_to_hK
+  geometry: discounted_future_pair_infonce
+  geometry_queries: [real_terminal, predicted_terminal]
+  negatives: cross_episode_in_batch
+  same_episode_negatives: masked
+
+inference:
+  planner: stable_worldmodel.solver.CEMSolver
+  candidate_rollout: lewm_action_conditioned_latent_rollout
+  cost: one_minus_directed_successor_cosine
+  learned_action_policy: false
+
+hypothesis:
+  statement: A directed future-pair geometry should rank reachable goals better than Euclidean latent distance while retaining action-conditioned LeWM dynamics.
+  claim_status: untested
+  baseline: configs/experiment/lewm_cube_checkpoint_o50.yaml

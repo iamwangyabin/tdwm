@@ -1,0 +1,176 @@
+schema_version: 1
+id: aligned_e2e_mc_gt_lewm_cube_full
+method: aligned_e2e_mc_gt_lewm
+display_name: Aligned E2E MC-GT-LeWM
+environment: cube
+stage: full_training
+initialization: random_from_scratch
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+
+seeds: [3072]
+
+dataset:
+  identifier: quentinll/lewm-cube
+  file: ogbench/cube_single_expert.h5
+  expected_size_bytes: 101942558720
+  accepted_size_bytes: [101942558720, 74104077358]
+  optimized_layout:
+    file: cube_single_expert_chunk1.h5
+    pixels_chunk_frames: 1
+    lossless: true
+    sha256: 3cf6477768f1a2979acefa3aeb6c27c45422b8b6fbce8527419943d3e679a245
+  lance:
+    suffix: .lance
+    manifest_suffix: .manifest.json
+    stable_worldmodel_version: 0.1.1
+    image_codec: jpeg
+    jpeg_quality: 100
+    minimum_pixel_verification_samples: 128
+    numeric_verification:
+      action: exact
+      observation: float32_cast_exact
+    source:
+      file: cube_single_expert_chunk1.h5
+      size_bytes: 74104077358
+      sha256: 3cf6477768f1a2979acefa3aeb6c27c45422b8b6fbce8527419943d3e679a245
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  keys_to_load: [pixels, action, observation]
+  keys_to_cache: [action, observation]
+  keys_to_merge:
+    proprio: observation
+
+split:
+  unit: sequence_clip_per_view
+  implementation: torch.utils.data.random_split
+  train_fraction: 0.9
+  validation_fraction: 0.1
+  seed_source: training_seed
+  exact_indices_artifacts:
+    world: splits/world/split_indices.npz
+    tail: splits/tail/split_indices.npz
+
+sequence:
+  frame_skip: 5
+  history_frames: 3
+  prediction_frames: 1
+  world_num_steps: 4
+  model_rollout_horizon: 5
+  max_goal_offset: 16
+  tail_num_steps: 24
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+normalization:
+  fit_population: complete_dataset
+  columns: [action, observation]
+  boundary_nan_policy: preserve_during_preprocessing_then_zero_actions_before_forward
+
+model:
+  parameters: 18034628
+  encoder_size: tiny
+  patch_size: 14
+  embed_dim: 192
+  predictor_depth: 6
+  predictor_heads: 16
+  predictor_mlp_dim: 2048
+  predictor_dim_head: 64
+  predictor_dropout: 0.1
+  predictor_embedding_dropout: 0.0
+  projector_hidden_dim: 2048
+
+joint_objective:
+  prediction: original_lewm_mse_on_independent_short_clips
+  regularization: sigreg_on_independent_short_clips
+  tail: supervised_mc_on_predicted_terminal_history
+  tail_target_encoder: ema_world_model
+  backpropagate_tail_through_rollout: true
+  prediction_weight: 1.0
+  tail_weight: 1.0
+
+tail_value:
+  objective_version: 2
+  objective: supervised_mc
+  architecture: squared_shared_potential_anchor
+  boundary_condition: exact_current_goal_zero
+  history_dim: 626
+  action_block_dim: 25
+  hidden_dim: 512
+  gamma: 0.95
+  goal_sampling: all_future_offsets_uniform
+  continuation_policy: offline_dataset_behavior
+  target_world_model: true
+  target_world_ema_decay: 0.995
+  world_gradient_scale: 0.1
+  loss_warmup_fraction: 0.05
+
+loss:
+  prediction: mse
+  sigreg:
+    weight: 0.09
+    knots: 17
+    num_projections: 1024
+    effective_batch_size: 128
+
+loader:
+  # The original LeWM loss receives 128 independent short clips. A separate
+  # long-sequence stream supplies 16 tail clips in the same optimizer update.
+  world_batch_size: 128
+  tail_batch_size: 16
+  world_minimum_unique_episodes_per_batch: 128
+  tail_minimum_unique_episodes_per_batch: 16
+  stride_aware_lance: true
+  device_image_preprocessing: true
+  episode_streaming: true
+  episode_pool_size: 384
+  episode_read_size: 16
+  world_episode_cache_bytes: 6442450944
+  tail_episode_cache_bytes: 6442450944
+  episode_prefetch_blocks: 16
+  pin_memory: true
+
+logging:
+  type: csv
+  flush_every_n_steps: 50
+
+optimizer:
+  type: AdamW
+  world_model_learning_rate: 0.00005
+  value_learning_rate: 0.0003
+  weight_decay: 0.001
+
+scheduler:
+  type: linear_warmup_cosine_annealing
+  interval: optimizer_step
+  warmup_fraction: 0.01
+
+training:
+  epochs: 10
+  scheduler_epochs: 10
+  optimizer_steps_per_epoch: 12796
+  precision: bf16-mixed
+  model_compile: false
+  model_compile_mode: reduce-overhead
+  gradient_clip_norm: 1.0
+  checkpoint_every_epochs: 1
+  checkpoint_selection: locked_final_epoch
+  resume: true
+
+planner:
+  connected_after_training: true
+  solver: unchanged_lewm_cem
+  horizon: 5
+  evaluation_goal_offset: 50
+  cost: terminal_latent_goal_distance_plus_boundary_anchored_tail
+
+provenance:
+  baseline_protocol: configs/experiment/lewm_cube_train.yaml
+  supersedes: configs/experiment/e2e_joint_td_gt_lewm_cube_train.yaml
+  note: The LeWM loss uses the exact independent 128-clip view. The MC tail uses a separate long view, an EMA target representation, all offsets 1..16, and an architectural zero boundary. Both losses update one shared online LeWM in one optimizer step.

@@ -1,0 +1,65 @@
+schema_version: 1
+id: gt_lewm
+display_name: Goal-Tail LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  adapter: tdwm.adapters.gt_lewm.GoalTailLeWM
+
+input:
+  pixels: true
+  proprioception: false
+  action_dimension: infer_from_dataset
+  image_size: 224
+
+sequence:
+  frameskip: 5
+  history_size: 3
+  num_predictions: 1
+  num_steps: 11
+
+model:
+  encoder:
+    type: vit_tiny
+    pretrained: false
+    patch_size: 14
+    embedding_dimension: 192
+  predictor:
+    depth: 6
+    heads: 16
+    mlp_dimension: 2048
+    head_dimension: 64
+    dropout: 0.1
+  projector:
+    hidden_dimension: 2048
+    normalization: batch_norm_1d
+
+loss:
+  prediction: mse
+  sigreg:
+    weight: 0.09
+    projections: 1024
+    integration_knots: 17
+    effective_batch_size: 128
+  goal_tail:
+    objective_version: 2
+    weight: 1.0
+    boundary_weight: 0.1
+    gamma: 0.95
+    max_goal_offset: 8
+    td_horizon: 4
+    target_ema_decay: 0.995
+    loss_warmup_fraction: 0.05
+    continuation_policy: offline_dataset_behavior
+
+inference:
+  objective: short_horizon_latent_cost_plus_bellman_terminal_value
+  terminal_value: V_mu_D(z, goal)
+  planning: mpc
+
+provenance:
+  note: The base LeWM modules remain separate from the baseline implementation; GT-LeWM trains all local windows with SIGReg and adds a future-goal Bellman value head.

@@ -39,7 +39,9 @@ def test_first_executable_experiment_matches_lewm_pusht_protocol() -> None:
 
 
 def test_checkpoint_export_converts_plain_mapping_to_omegaconf() -> None:
-    source = (ROOT / "src/tdwm/training/lewm.py").read_text(encoding="utf-8")
+    source = (ROOT / "src/tdwm/training/lewm_pusht.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(source)
     save_calls = [
         node

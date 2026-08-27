@@ -1,0 +1,87 @@
+schema_version: 1
+id: lewm_cube_official_checkpoint_o25
+method: lewm
+environment: cube
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+  precision: fp32
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+dataset:
+  identifier: quentinll/lewm-cube
+  file: ogbench/cube_single_expert.h5
+  expected_size_bytes: 101942558720
+  accepted_size_bytes: [101942558720, 74104077358]
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  episode_steps: 201
+  lance:
+    manifest_suffix: .manifest.json
+    image_codec: jpeg
+    jpeg_quality: 100
+  keys_to_load:
+    - pixels
+    - action
+    - qpos
+    - qvel
+    - privileged_block_0_pos
+    - privileged_block_0_quat
+  training_split:
+    status: unavailable
+    note: The released checkpoint does not publish its exact train/validation episode indices.
+  evaluation_split:
+    population: all valid start rows across all 10000 dataset episodes
+    sampler: stable-worldmodel-0.1.1-valid-row-sampler
+    replacement: false
+
+checkpoint:
+  name: quentinll/lewm-cube
+  revision: b0747c5002e86d2ce8f3cd8178004b97524c587d
+  sha256: 2839a907362f403f9136383016e91774373a295d958ae75121791f22a9fddf89
+  parameters: 18034628
+
+world:
+  env_name: swm/OGBCube-v0
+  env_type: single
+  ob_type: states
+  image_size: 224
+  multiview: false
+  visualize_info: false
+  terminate_at_goal: true
+  success_threshold_meters: 0.04
+  success_definition: target cube center is within 0.04 m of the target position
+
+evaluation:
+  episodes: 50
+  goal_offset: 25
+  start_goal_source: same dataset episode
+
+context:
+  training_history_frames: 3
+  predictor_recurrent_window: 3
+  plan_config_history_len: 1
+  effective_observed_frames_at_first_plan: 1
+  note: stable-worldmodel 0.1.1 WorldModelPolicy does not consume PlanConfig.history_len; the released evaluator uses its default value 1.
+
+planning:
+  solver: CEM
+  horizon: 5
+  candidates: 300
+  # The released LeWM Cube evaluator inherits solver/cem.yaml (30 iterations).
+  iterations: 30
+  elites: 30
+  initial_variance: 1.0
+  action_block: 5
+  frame_skip: 5
+  receding_horizon: 5
+  executed_environment_steps_before_replanning: 25
+  episode_budget: 50
+  planning_seed: 42
+  solver_batch_size: 1
+  warm_start: true

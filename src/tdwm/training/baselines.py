@@ -29,7 +29,7 @@ from tdwm.training.experiment import (
     git_state,
     prepare_run_directory,
 )
-from tdwm.training.lewm import (
+from tdwm.training.lewm_pusht import (
     SequenceTransform,
     _install_torchvision_v2_compatibility,
     _load_yaml,

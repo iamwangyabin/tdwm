@@ -1,0 +1,58 @@
+schema_version: 1
+id: rf_anchored_e2e_manifold_prefix_wm
+display_name: Anchored End-to-End Reward-Free Manifold Prefix WM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  encoder_container: swm.wm.LeWM
+  successor_head: tdwm.methods.rf_successor_lewm.ManifoldTransformerMomentHead
+  adapter: tdwm.adapters.rf_successor_lewm.RewardFreeSuccessorLeWM
+
+input:
+  history: trainable_student_latent_observation
+  action: externally_supplied_candidate_prefix
+  goal_during_training: false
+  reward_during_training: false
+
+model:
+  representation:
+    initialization: audited_pretrained_lewm
+    student_trainable: true
+    teacher_trainable: false
+  primitive_prediction:
+    type: causal_action_prefix_future_latents
+    output: every_future_teacher_latent_from_1_to_K
+  successor:
+    construction: exact_lift_then_normalized_discounted_cumsum
+    output: every_finite_horizon_successor_from_1_to_K
+    feature_basis: augmented_latent_squared_distance
+  action_policy:
+    present: false
+
+target:
+  prediction: frozen_pretrained_teacher_latents
+  goal_encoder: frozen_pretrained_teacher
+  horizons: all_prefixes_1_to_K
+  td_bootstrap: false
+
+loss:
+  - all_horizon_teacher_latent_sequence_mse
+  - student_to_frozen_teacher_coordinate_mse
+
+inference:
+  history_encoder: trained_student
+  prediction_space: frozen_teacher_coordinates
+  goal_encoder: frozen_teacher
+  action_selection: stable_worldmodel_cem_mpc
+  learned_policy: false
+
+scope:
+  supported_zero_shot_query: squared_distance_to_any_teacher_encoded_goal
+  arbitrary_reward_zero_shot_rl: false
+
+provenance:
+  frozen_control: configs/methods/rf_frozen_manifold_prefix_successor_wm.yaml
+  note: Tests representation adaptation while a fixed LeWM teacher preserves the planning coordinate system.

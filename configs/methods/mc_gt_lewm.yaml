@@ -1,0 +1,37 @@
+schema_version: 1
+id: mc_gt_lewm
+display_name: MC-GT-LeWM
+full_name: Monte Carlo Goal-Tail LeWM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  base_model: swm.wm.lewm.LeWM
+  value: tdwm.methods.goal_tail_value.GoalTailValue
+
+base_model:
+  frozen: true
+  history_size: 3
+
+value:
+  input: three_latents_plus_two_normalized_action_blocks_and_goal
+  output: scalar_normalized_discounted_latent_cost
+  hidden_dim: 512
+
+objective:
+  type: supervised_monte_carlo
+  gamma: 0.95
+  future_goal_offset: [1, 16]
+  td: false
+  ema: false
+  target_network: false
+  policy: false
+  successor: false
+
+inference:
+  planner_connected: true
+  objective: terminal_latent_goal_distance_plus_goal_tail_value
+  tail_weight: 1.0
+  cost_scale_note: The upstream LeWM sum cost and mean-trained value are put on a common scale by multiplying the value by latent_dim.

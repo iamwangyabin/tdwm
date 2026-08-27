@@ -1,17 +1,19 @@
 # 四环境复现配置
 
-配置只保留两类：
+配置分为环境、方法和锁定的实验协议：
 
 ```text
 configs/
 ├── envs/            # 每个环境的环境、数据和评测配置
-└── methods/         # 每个方法的模型和训练配置
+├── methods/         # 每个方法的模型和训练配置
+└── experiment/      # 已锁定、可直接执行和审计的实验协议
 ```
 
-训练时直接选择一个环境配置和一个方法配置进行组合，不再维护额外的矩阵文件。
-完整实验仍然是 4 个环境 × 7 个方法。当前只执行一个训练种子；首个 LeWM PushT
-运行沿用已记录诊断实验的 `seed=3072`。只有用户明确决定扩大统计评测后才增加其他
-种子。训练入口采用明确参数，例如 `--env pusht --method lewm --seed 3072`。
+训练时直接选择一个环境配置和一个方法配置进行组合。进入实际运行的单元必须在
+`experiment/` 中锁定数据、checkpoint、episode 选择、规划预算和成功定义；这类文件
+是运行协议，不是重复维护的实验矩阵。
+完整实验仍然是 4 个环境 × 7 个方法；LeWM Cube 复现锁定训练种子
+`0, 42, 3072`。
 
 ## 当前矩阵状态
 
@@ -37,11 +39,14 @@ reward-free、任意目标条件控制。没有先确定 goal-conditioned reward
 
 - 固定依赖：`stable-worldmodel[all]==0.1.1`；
 - 主结果使用相同离线数据、训练/验证划分、评测 episode、起点、目标偏移和预算；
-- 当前训练随机种子：`3072`（单 seed）；
-- 数据按 episode 使用固定种子 42 划分，不能让不同方法重新随机划分；
+- LeWM Cube 训练随机种子：`0, 42, 3072`；
+- 原始 LeWM 训练按 sequence clip 使用每个训练 seed 做 90/10 随机划分，并保存
+  每次运行的确切索引；后续方法比较必须复用相应 seed 的索引；
 - 每次评测 50 条轨迹，目标偏移 25 个环境步，执行预算 50 个环境步；
 - world model 统一使用 CEM：300 candidates、30 elites、horizon 5、action block 5；
-- PushT 使用 30 次 CEM 迭代，其他环境使用 10 次；
+- LeWM 发布的 Cube evaluator 继承 `solver/cem.yaml`，使用 30 次 CEM 迭代；其他环境
+  或方法只能在其各自发布协议明确为 10 次时使用 10 次。跨方法比较必须锁定相同的
+  CEM 预算，不能把这一差异伪装成方法收益；
 - world model 训练 10 epochs，符合 LeWM 论文附录中的四环境协议；
 - policy baseline 使用其发布配置的训练预算：GCBC/GCIVL/GCIQL 为 100 epochs；
 - 主要 DINO-WM 结果不使用 proprioception；`DINO-WM+prop` 应作为单独消融，不能
@@ -71,10 +76,98 @@ data/lewm-pusht/pusht_expert_train.h5.zst
 
 ## 执行边界
 
-这些文件现在是实验配置的唯一事实来源。`scripts/train.py` 已实现 PushT 上的
-LeWM、PLDM、DINO-WM、GCBC、GCIVL 和 GCIQL；其他环境的训练适配仍未实现。
-`scripts/evaluate.py` 已按环境配置调用统一的 dataset-backed `world.evaluate(...)`
-协议，但每个环境仍需要匹配的数据集和可加载 checkpoint。GCIVL/GCIQL 分别保留
-价值（或 V/Q）和策略两个阶段。训练入口通过
-`import stable_worldmodel as swm` 使用已安装的 `0.1.1`，读取这里的配置进行轻量
-组装，不复制或修改上游训练脚本。
+环境、方法配置与 `experiment/` 下的锁定协议是实验事实来源。当前已实现官方 LeWM
+checkpoint 的 Cube O25 评测入口：
+
+```bash
+export STABLEWM_HOME=/path/to/persistent/stable_worldmodel
+export TDWM_CUBE_DATASET=/path/to/ogbench/cube_single_expert.h5
+python -m pip install --no-deps -e .
+python scripts/evaluate.py \
+  --config configs/experiment/lewm_cube_checkpoint_o25.yaml \
+  --output-dir outputs/lewm_cube_official_checkpoint_o25
+```
+
+正式评测前使用相同输出目录运行一次 `--smoke`。冒烟运行只执行 1 条 episode、8 个
+候选和 1 次 CEM 迭代，并缓存从完整数据计算的 action normalization；随后的正式运行
+会复用该统计量并以锁定协议覆盖冒烟清单和结果：
+
+```bash
+python scripts/evaluate.py --smoke \
+  --config configs/experiment/lewm_cube_checkpoint_o25.yaml \
+  --output-dir outputs/lewm_cube_official_checkpoint_o25
+```
+
+入口通过 `import stable_worldmodel as swm` 使用 `0.1.1` 的公开 API，不复制上游
+baseline 源码。每次运行会先写入协议清单和确切的 episode/start/goal 索引，再开始
+规划；逐 episode success 和完整聚合结果写入 `results.json`。
+
+官方 checkpoint 评测通过后，使用锁定的原始训练配置进行多 seed 重训。正式训练
+前必须先运行冒烟训练，再用 `--resume required` 验证 Lightning checkpoint 可以恢复：
+
+```bash
+python scripts/train.py --smoke --resume never --seed 0 \
+  --config configs/experiment/lewm_cube_train.yaml \
+  --dataset "$TDWM_CUBE_DATASET"
+python scripts/train.py --smoke --resume required --seed 0 \
+  --config configs/experiment/lewm_cube_train.yaml \
+  --dataset "$TDWM_CUBE_DATASET"
+python scripts/train.py --seed 0 \
+  --config configs/experiment/lewm_cube_train.yaml \
+  --dataset "$TDWM_CUBE_DATASET"
+```
+
+训练运行会保存协议与运行时清单、确切 split 索引、每 epoch 的 Lightning checkpoint
+和 Stable World Model 可加载的导出权重。数据、checkpoint 和原始日志只保存在运行
+目录，不进入 Git。
+
+Cube 原始 HDF5 的 pixels 每 100 帧压缩为一个 chunk，在远程挂载上进行随机 clip
+训练会产生严重读取放大。可以先使用无损重排入口把 pixels 改为每帧一个 chunk；
+它保留全部列、episode 边界、dtype 和像素值：
+
+```bash
+python scripts/rechunk_cube_hdf5.py \
+  data/lewm-cube/cube_single_expert.h5 \
+  data/lewm-cube/cube_single_expert_chunk1.h5
+```
+
+转换完成后会逐列抽样校验并生成相邻的 manifest。优化布局的确切大小和 SHA-256
+锁定在 `experiment/lewm_cube_train.yaml`。该布局适合逐像素严格复现，但在云端远程
+挂载上仍可能受 HDF5 随机读取延迟限制。
+
+正式多 seed 快速训练可以再通过 `stable-worldmodel==0.1.1` 的公开转换 API 生成
+Lance 数据集：
+
+```bash
+python scripts/convert_cube_lance.py \
+  data/lewm-cube/cube_single_expert_chunk1.h5 \
+  data/lewm-cube/cube_single_expert_jpeg100.lance
+```
+
+转换固定使用 JPEG 质量 100，并生成相邻的 `.lance.manifest.json`。训练入口同时接受
+锁定大小的 HDF5 文件和带有效 manifest 的 `.lance` 目录；缺少 manifest、转换版本
+不符、图像质量不是 100、`action` 不是精确值，或 `observation` 不是源数据的确定性
+float32 转换时，Lance 数据会被拒绝。JPEG-100 保持图像分辨率，但不是逐像素无损，
+因此必须把这类运行标记为快速数据变体，并保证所有对比 seed 使用同一个转换结果。
+
+## PushT baseline 入口
+
+现有 Cube 训练/评测脚本保留原有参数形式。PushT baseline 使用 `--env` 和 `--method`
+形式，由同一入口分发到独立的 PushT 适配：
+
+```bash
+python scripts/train.py \
+  --env pusht --method lewm --seed 3072 \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+
+python scripts/evaluate.py \
+  --env pusht --method lewm \
+  --checkpoint lewm_pusht_seed3072_FINGERPRINT/weights_epoch_10.pt \
+  --dataset /path/to/pusht_expert_train.h5 \
+  --run-root /path/to/persistent/tdwm-runs
+```
+
+PushT 的训练适配覆盖 LeWM、PLDM、DINO-WM、GCBC、GCIVL 和 GCIQL；所有运行仍需
+固定数据集、episode split、seed、checkpoint 和原始逐 episode 结果。当前只验证
+seed `3072` 的入口，不能把单 seed 运行当作性能优于 baseline 的证据。

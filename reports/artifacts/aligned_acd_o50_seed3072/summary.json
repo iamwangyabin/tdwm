@@ -1,0 +1,235 @@
+{
+  "execution_notes": {
+    "planned_vectorized_o200": {
+      "interpretation_constraint": "The archive is six-by-O50 and must not be represented as one O200 execution.",
+      "reason": "Constructing 200 MuJoCo environments exceeded the RTX 3090 host's approximately 15 GiB memory budget.",
+      "replacement": "Six separate matched 50-episode planning selections, totalling 300 paired episodes.",
+      "status": "terminated_by_operating_system"
+    }
+  },
+  "methods": {
+    "A": "Original LeWM world model with terminal cost only",
+    "B": "Original LeWM world model with a boundary-anchored tail trained in original LeWM coordinates; not yet completed",
+    "B_prime": "Original LeWM world model with the Aligned-coordinate tail; invalid cross-coordinate diagnostic only",
+    "C": "Aligned world model with terminal cost only",
+    "D": "Aligned world model with boundary-anchored MC tail"
+  },
+  "per_selection": {
+    "42": {
+      "deltas_percentage_points": {
+        "C_minus_A": 2.0,
+        "D_minus_A": 8.0,
+        "D_minus_C": 6.0
+      },
+      "episodes": 50,
+      "selection_sha256": "e46ea81cce2e6a9a5df05ba04893b4181cbd8979340111a012c30f1efa2d7ee7",
+      "success_rates_percent": {
+        "A": 54.0,
+        "C": 56.0,
+        "D": 62.0
+      },
+      "successes": {
+        "A": 27,
+        "C": 28,
+        "D": 31
+      }
+    },
+    "43": {
+      "deltas_percentage_points": {
+        "C_minus_A": 8.0,
+        "D_minus_A": 4.0,
+        "D_minus_C": -4.0
+      },
+      "episodes": 50,
+      "selection_sha256": "ec11aef75502c4d2be1b8505a242f384380c5152c01d8b060545acc2d3db600d",
+      "success_rates_percent": {
+        "A": 66.0,
+        "C": 74.0,
+        "D": 70.0
+      },
+      "successes": {
+        "A": 33,
+        "C": 37,
+        "D": 35
+      }
+    },
+    "44": {
+      "deltas_percentage_points": {
+        "C_minus_A": 2.0,
+        "D_minus_A": 2.0,
+        "D_minus_C": 0.0
+      },
+      "episodes": 50,
+      "selection_sha256": "db4670a9f5d9f93086676c6181c91a4463636e6bf9bcc20b2fc2a7e0995e0b64",
+      "success_rates_percent": {
+        "A": 44.0,
+        "C": 46.0,
+        "D": 46.0
+      },
+      "successes": {
+        "A": 22,
+        "C": 23,
+        "D": 23
+      }
+    },
+    "45": {
+      "deltas_percentage_points": {
+        "C_minus_A": 8.0,
+        "D_minus_A": 6.0,
+        "D_minus_C": -2.0
+      },
+      "episodes": 50,
+      "selection_sha256": "b494e105ba95bff8c6baaee9415afa31b4bf19e8346f95984fa007de0383a674",
+      "success_rates_percent": {
+        "A": 46.0,
+        "C": 54.0,
+        "D": 52.0
+      },
+      "successes": {
+        "A": 23,
+        "C": 27,
+        "D": 26
+      }
+    },
+    "46": {
+      "deltas_percentage_points": {
+        "C_minus_A": 4.0,
+        "D_minus_A": 10.0,
+        "D_minus_C": 6.0
+      },
+      "episodes": 50,
+      "selection_sha256": "faa0edcfb1508bd0ff222075d7509c096d9eec351956ef65ed462bbe6848592c",
+      "success_rates_percent": {
+        "A": 48.0,
+        "C": 52.0,
+        "D": 58.0
+      },
+      "successes": {
+        "A": 24,
+        "C": 26,
+        "D": 29
+      }
+    },
+    "47": {
+      "deltas_percentage_points": {
+        "C_minus_A": 6.0,
+        "D_minus_A": -2.0,
+        "D_minus_C": -8.0
+      },
+      "episodes": 50,
+      "selection_sha256": "fea229332498de08753956ecce574cc61744519a7a395656f08777000d8783ca",
+      "success_rates_percent": {
+        "A": 48.0,
+        "C": 54.0,
+        "D": 46.0
+      },
+      "successes": {
+        "A": 24,
+        "C": 27,
+        "D": 23
+      }
+    }
+  },
+  "pooled": {
+    "comparisons": {
+      "A_to_C": {
+        "both_success": 142,
+        "delta_percentage_points": 5.0,
+        "delta_successes": 15,
+        "episodes": 300,
+        "holm_adjusted_p_across_three_contrasts": 0.060221555759198964,
+        "left": "A",
+        "left_only": 11,
+        "mcnemar_exact_two_sided_p": 0.020073851919732988,
+        "neither_success": 121,
+        "right": "C",
+        "right_only": 26
+      },
+      "A_to_D": {
+        "both_success": 139,
+        "delta_percentage_points": 4.666666666666667,
+        "delta_successes": 14,
+        "episodes": 300,
+        "holm_adjusted_p_across_three_contrasts": 0.08711704384768382,
+        "left": "A",
+        "left_only": 14,
+        "mcnemar_exact_two_sided_p": 0.04355852192384191,
+        "neither_success": 119,
+        "right": "D",
+        "right_only": 28
+      },
+      "C_to_D": {
+        "both_success": 154,
+        "delta_percentage_points": -0.3333333333333333,
+        "delta_successes": -1,
+        "episodes": 300,
+        "holm_adjusted_p_across_three_contrasts": 1.0,
+        "left": "C",
+        "left_only": 14,
+        "mcnemar_exact_two_sided_p": 1.0,
+        "neither_success": 119,
+        "right": "D",
+        "right_only": 13
+      }
+    },
+    "episodes": 300,
+    "multiplicity_note": "A-to-C, C-to-D, and A-to-D are reported as three peer contrasts. Holm-adjusted p-values are included; A-to-C was not preregistered as a primary contrast.",
+    "selection_direction_counts": {
+      "C_minus_A": {
+        "negative": 0,
+        "positive": 6,
+        "zero": 0
+      },
+      "D_minus_A": {
+        "negative": 1,
+        "positive": 5,
+        "zero": 0
+      },
+      "D_minus_C": {
+        "negative": 3,
+        "positive": 2,
+        "zero": 1
+      }
+    },
+    "success_rates_percent": {
+      "A": 51.0,
+      "C": 56.0,
+      "D": 55.666666666666664
+    },
+    "successes": {
+      "A": 153,
+      "C": 168,
+      "D": 167
+    }
+  },
+  "sample_audit": {
+    "cross_planning_seed_duplicate_pair_count": 0,
+    "cross_planning_seed_duplicate_pair_hashes": [],
+    "rows": 300,
+    "source_episodes_used_more_than_once": {
+      "5132": 2,
+      "7002": 2,
+      "8400": 2,
+      "9267": 2
+    },
+    "unique_pair_hashes": 300,
+    "unique_source_episodes": 296
+  },
+  "schema_version": 1,
+  "study": {
+    "environment": "swm/OGBCube-v0",
+    "episode_count": 300,
+    "episodes_per_selection": 50,
+    "goal_offset": 50,
+    "note": "These are six evaluation selections for one training seed, not six independently trained models.",
+    "planning_selection_seeds": [
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ],
+    "training_seed": 3072
+  }
+}

@@ -1,0 +1,52 @@
+schema_version: 1
+id: rf_e2e_moment_sequence_wm
+display_name: Reward-Free E2E Moment Sequence WM
+family: latent_world_model
+protocol: offline_reward_free
+
+implementation:
+  package: stable-worldmodel[all]
+  version: 0.1.1
+  encoder_container: swm.wm.LeWM
+  successor_head: tdwm.methods.rf_successor_lewm.ActionPrefixMomentHead
+  adapter: tdwm.adapters.rf_successor_lewm.RewardFreeSuccessorLeWM
+
+input:
+  history: latent_observation_history
+  action: externally_supplied_candidate_prefix
+  goal_during_training: false
+  reward_during_training: false
+
+model:
+  primitive_prediction:
+    type: causal_action_prefix_future_moments
+    output: every_lifted_future_moment_from_1_to_K
+  successor:
+    construction: exact_normalized_discounted_cumsum
+    output: every_finite_horizon_successor_from_1_to_K
+    feature_basis: augmented_latent_squared_distance
+  action_policy:
+    present: false
+
+target:
+  type: online_end_to_end_direct_moments
+  horizons: all_prefixes_1_to_K
+  td_bootstrap: false
+
+loss:
+  - group_balanced_all_horizon_moment_sequence_mse
+  - sigreg
+
+inference:
+  goal_query: linear_projection_of_terminal_successor
+  action_selection: stable_worldmodel_cem_mpc
+  autoregressive_latent_rollout: false
+  learned_policy: false
+
+scope:
+  supported_zero_shot_query: squared_distance_to_any_encoded_goal
+  arbitrary_reward_zero_shot_rl: false
+
+provenance:
+  baseline_variant: configs/methods/rf_direct_moment_sequence_wm.yaml
+  note: This changes only target-gradient routing; both online encoder branches receive the direct all-horizon moment error.

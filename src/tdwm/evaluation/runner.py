@@ -22,7 +22,7 @@ from tdwm.training.experiment import (
     dataset_signature,
     git_state,
 )
-from tdwm.training.lewm import (
+from tdwm.training.lewm_pusht import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     _load_yaml,

@@ -1,0 +1,113 @@
+schema_version: 1
+id: td_gt_lewm_cube_seed3072_epoch19_o25
+method: td_gt_lewm
+display_name: TD-GT-LeWM
+environment: cube
+stage: planner_evaluation
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+  precision: fp32
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+dataset:
+  identifier: quentinll/lewm-cube
+  format: lance
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  episode_steps: 201
+  lance:
+    manifest_suffix: .manifest.json
+    image_codec: jpeg
+    jpeg_quality: 100
+  keys_to_load:
+    - pixels
+    - action
+    - qpos
+    - qvel
+    - privileged_block_0_pos
+    - privileged_block_0_quat
+  evaluation_split:
+    population: all valid start rows across all 10000 dataset episodes
+    sampler: stable-worldmodel-0.1.1-valid-row-sampler
+    replacement: false
+
+base_checkpoint:
+  source: local_lewm_training_export
+  training_protocol: lewm_cube_train.yaml
+  seed: 3072
+  epoch: 10
+  parameters: 18034628
+  sha256: 0ce38860a672c4a304d6921c6f07158977bb1d2c8f0eed8a002bb7c89502b579
+
+value_checkpoint:
+  source: td_gt_lewm_cube_train.yaml
+  seed: 3072
+  epoch: 19
+  objective_version: 1
+  parameters: 682497
+  sha256: cb2b88014a969c37f791fa6dbffdfcd168869587eeb32a909412f75b47c43c18
+
+tail_value:
+  objective: one_step_td
+  history_size: 3
+  latent_dim: 192
+  history_dim: 626
+  action_block_dim: 25
+  hidden_dim: 512
+  max_goal_offset: 16
+  gamma: 0.95
+  target_ema_decay: 0.995
+  terminate_bootstrap_at_goal: true
+  weight: 1.0
+  target_cost_reduction: mean
+  upstream_terminal_cost_reduction: sum
+  upstream_scale_factor: 192
+
+world:
+  env_name: swm/OGBCube-v0
+  env_type: single
+  ob_type: states
+  image_size: 224
+  multiview: false
+  visualize_info: false
+  terminate_at_goal: true
+  success_threshold_meters: 0.04
+  success_definition: target cube center is within 0.04 m of the target position
+
+evaluation:
+  episodes: 50
+  goal_offset: 25
+  start_goal_source: same dataset episode
+
+context:
+  training_history_frames: 3
+  predictor_recurrent_window: 3
+  effective_observed_frames_at_first_plan: 1
+
+planning:
+  solver: CEM
+  horizon: 5
+  candidates: 300
+  iterations: 30
+  elites: 30
+  initial_variance: 1.0
+  action_block: 5
+  frame_skip: 5
+  receding_horizon: 5
+  executed_environment_steps_before_replanning: 25
+  episode_budget: 50
+  planning_seed: 42
+  solver_batch_size: 1
+  warm_start: true
+  plan_config_history_len: 1
+
+comparison:
+  baseline_protocol: configs/experiment/lewm_cube_seed3072_o25.yaml
+  mc_gt_protocol: configs/experiment/mc_gt_lewm_cube_seed3072_o25.yaml
+  controlled_difference: TD-trained terminal goal-tail value only

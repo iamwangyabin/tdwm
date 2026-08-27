@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Reward-Free Successor LeWM：有限时域、动作条件的 successor-feature world model 技术说明。">
+  <title>Reward-Free Successor LeWM | 技术说明</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="successor-lewm.css">
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']]
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="返回 World Model Lab">
+      <span class="brand-mark" aria-hidden="true">SF</span>
+      <span>World Model Lab</span>
+    </a>
+    <nav aria-label="页面目录">
+      <a href="#interface">模型</a>
+      <a href="#theory">理论</a>
+      <a href="#training">训练</a>
+      <a href="#code">代码</a>
+      <a href="#boundary">边界</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="title-block" aria-labelledby="page-title">
+      <p class="eyebrow">METHOD SPECIFICATION / REWARD-FREE EXPLICIT WORLD MODEL</p>
+      <h1 id="page-title">Reward-Free Successor LeWM</h1>
+      <p class="subtitle">一个有限时域、动作条件的 world model：它既预测候选动作序列会到达的 latent，也预测这段未来的累计任务特征。goal value 只是累计特征对 goal 的线性读出，不是另一套独立的 scalar head。</p>
+      <div class="core-equation">
+        <span>核心对象</span>
+        <div class="display-math">
+          \[
+            \hat S_h(h_t,A_{1:h})
+            \approx
+            \mathbb E_P\!\left[
+              \sum_{j=1}^{h}\gamma^{j-1}\psi(s_{t+j})
+              \middle|h_t,A_{1:h}
+            \right],
+            \qquad
+            \hat C_h(A_{1:h},g)
+            =
+            1-\frac{\hat S_h^\top\psi(g)}{Z_h}
+          \]
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="interface">
+      <div class="section-heading">
+        <p class="section-index">01 / MODEL INTERFACE</p>
+        <h2>模型回答的不是“未来会怎样”，而是“这条明确动作前缀的未来会怎样”。</h2>
+      </div>
+
+      <div class="two-column">
+        <div class="notation-table" role="table" aria-label="模型符号">
+          <div role="row"><span role="cell">\(o_t\)</span><p role="cell">时刻 \(t\) 的图像观测。</p></div>
+          <div role="row"><span role="cell">\(z_t=\phi_\theta(o_t)\)</span><p role="cell">动力学 latent，服务于状态预测。</p></div>
+          <div role="row"><span role="cell">\(\psi_t=\operatorname{norm}(q_\eta(z_t))\)</span><p role="cell">单位归一化的任务特征，服务于 goal 评分。</p></div>
+          <div role="row"><span role="cell">\(h_t\)</span><p role="cell">最近 \(m\) 个 latent 与历史动作构成的 LeWM 状态。</p></div>
+          <div role="row"><span role="cell">\(A_{1:K}\)</span><p role="cell">CEM 提供的 \(K\) 步候选动作前缀，不由模型生成。</p></div>
+          <div role="row"><span role="cell">\(g\)</span><p role="cell">目标观测，目标向量为 \(\psi_g=\psi(g)\)。</p></div>
+        </div>
+
+        <div class="interface-equations">
+          <p class="label">模型输入与输出</p>
+          <div class="display-math">
+            \[
+              h_t =
+              \left(z_{t-m+1:t},a_{t-m+1:t-1}\right),
+              \qquad
+              \left(\hat z_{t+1:t+K},\hat S_{1:K}\right)
+              =F_\omega(h_t,A_{1:K})
+            \]
+          </div>
+          <p>输出有两部分。第一部分是逐时刻 latent rollout；第二部分是每个 horizon 的累计 future feature。二者都以同一条动作前缀为条件。</p>
+          <div class="type-signature">
+            <code>F<sub>&omega;</sub>: (B, history, action<sub>1:K</sub>) &rarr; [(B, K, d<sub>z</sub>), (B, K, d<sub>&psi;</sub>)]</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="architecture" aria-label="模型结构">
+        <div class="architecture-column">
+          <span class="architecture-label">STATE PATH</span>
+          <code>o<sub>t-m+1:t</sub> &rarr; &phi;<sub>&theta;</sub> &rarr; h<sub>t</sub></code>
+        </div>
+        <div class="architecture-column">
+          <span class="architecture-label">ACTION PATH</span>
+          <code>A<sub>1:K</sub> &rarr; U<sub>&xi;</sub> &rarr; u<sub>A</sub></code>
+        </div>
+        <div class="architecture-column shared">
+          <span class="architecture-label">SHARED PREFIX TRUNK</span>
+          <code>(h<sub>t</sub>, u<sub>A</sub>) &rarr; f<sub>&omega;</sub></code>
+        </div>
+        <div class="architecture-column">
+          <span class="architecture-label">LATENT HEAD</span>
+          <code>D<sub>z</sub>(f<sub>&omega;</sub>) &rarr; z&#770;<sub>t+1:t+K</sub></code>
+        </div>
+        <div class="architecture-column">
+          <span class="architecture-label">SUCCESSOR HEAD</span>
+          <code>D<sub>S</sub>(f<sub>&omega;</sub>) &rarr; S&#770;<sub>1:K</sub></code>
+        </div>
+      </div>
+      <p class="architecture-note">实现上，\(\hat\psi_{t+j}=\operatorname{norm}(q_\eta(\hat z_{t+j}))\)。因此 latent head 和 successor head 有明确的重叠区域，可以被同 horizon 的 consistency loss 校准。</p>
+    </section>
+
+    <section class="section tint" id="theory">
+      <div class="section-heading">
+        <p class="section-index">02 / THEORY</p>
+        <h2>用一个向量 \(S_h\)，同时表达多步 latent 结构与任意目标的有限时域 value。</h2>
+      </div>
+
+      <div class="theory-grid">
+        <article>
+          <p class="label">模型要逼近的条件期望</p>
+          <div class="display-math">
+            \[
+              S_h^\star(h_t,A_{1:h})
+              =
+              \mathbb E_P\!\left[
+                \sum_{j=1}^{h}
+                \gamma^{j-1}\psi(s_{t+j})
+                \ \middle|\ h_t,A_{1:h}
+              \right],
+              \qquad
+              Z_h=\sum_{j=1}^{h}\gamma^{j-1}
+            \]
+          </div>
+          <p>\(S_h^\star\) 是给定当前历史和候选动作前缀后的 future feature 条件期望。它是一个向量，不绑定某一个具体 goal。</p>
+        </article>
+        <article>
+          <p class="label">单条离线轨迹上的精确递推</p>
+          <div class="display-math">
+            \[
+              Y_1=\bar\psi_{t+1},
+              \qquad
+              Y_h=Y_{h-1}+\gamma^{h-1}\bar\psi_{t+h}
+            \]
+          </div>
+          <p>所以 \(Y_1,\ldots,Y_K\) 是同一条动作前缀的 horizon ladder。MSE 训练 \(\hat S_h\) 去逼近其条件期望，而不是为 \(K\) 个不同 goal 做 scalar 预测。</p>
+        </article>
+      </div>
+
+      <div class="derivation-block">
+        <div>
+          <p class="label">单位归一化的目标距离</p>
+          <div class="display-math">
+            \[
+              \frac{1}{2}\lVert\psi(s)-\psi(g)\rVert_2^2
+              =
+              1-\psi(s)^\top\psi(g)
+            \]
+          </div>
+        </div>
+        <div class="derivation-symbol" aria-hidden="true">&rArr;</div>
+        <div>
+          <p class="label">同 horizon 的有限时域 goal cost</p>
+          <div class="display-math">
+            \[
+              C_h(A_{1:h},g)
+              =
+              \frac{1}{Z_h}
+              \sum_{j=1}^{h}
+              \gamma^{j-1}
+              \frac{1}{2}\lVert\psi(s_{t+j})-\psi(g)\rVert_2^2
+              =
+              1-\frac{S_h^\top\psi(g)}{Z_h}
+            \]
+          </div>
+        </div>
+      </div>
+
+      <div class="semantic-note">
+        <strong>语义边界：</strong>
+        <span>\(S_h(h_t,A_{1:h})\) 是 action-conditioned finite-horizon plan feature，不是没有动作条件的 \(V_h(h_t,g)\)。这一点让离线训练和 CEM 查询问的是同一个问题。</span>
+      </div>
+
+      <div class="comparison" role="table" aria-label="TD-JEPA 与本方案的理论区别">
+        <div class="comparison-row header" role="row">
+          <div role="columnheader">对象</div>
+          <div role="columnheader">原始 TD-JEPA</div>
+          <div role="columnheader">Successor LeWM</div>
+        </div>
+        <div class="comparison-row" role="row">
+          <div role="cell">长期量</div>
+          <div role="cell">\(T(s,a,z)\approx\mathbb E_{\pi_z}\sum_{j\ge1}\gamma^{j-1}\psi(s_{t+j})\)</div>
+          <div role="cell">\(S_h^\star(h_t,A_{1:h})=\mathbb E_P[\sum_{j=1}^{h}\gamma^{j-1}\psi(s_{t+j})\mid h_t,A_{1:h}]\)</div>
+        </div>
+        <div class="comparison-row" role="row">
+          <div role="cell">未来动作来源</div>
+          <div role="cell">goal-conditioned policy \(\pi_z\)</div>
+          <div role="cell">CEM 的显式候选 \(A_{1:h}\)</div>
+        </div>
+        <div class="comparison-row" role="row">
+          <div role="cell">方法身份</div>
+          <div role="cell">zero-shot RL / implicit long-horizon model</div>
+          <div role="cell">reward-free explicit world model</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="training">
+      <div class="section-heading">
+        <p class="section-index">03 / TRAINING OBJECTIVE</p>
+        <h2>所有监督都来自同一段离线轨迹，不需要 reward 或 goal-specific scalar 标签。</h2>
+      </div>
+
+      <div class="target-definition">
+        <p class="label">EMA target</p>
+        <div class="display-math">
+          \[
+            \bar z_{t+j}=\phi^{-}(o_{t+j}),
+            \qquad
+            \bar\psi_{t+j}=\operatorname{norm}\left(q^{-}(\bar z_{t+j})\right),
+            \qquad
+            Y_h=\sum_{j=1}^{h}\gamma^{j-1}\bar\psi_{t+j}
+          \]
+        </div>
+        <p>上标 \((-)\) 表示 EMA target network，所有 target 都 stop-gradient。一个长度至少为 \(m+K\) 的离线片段即可同时产生 \(K\) 个 horizon 的监督。</p>
+      </div>
+
+      <div class="loss-table">
+        <article>
+          <div><span>L1</span><h3>Multi-step latent</h3></div>
+          <div class="display-math">\[\mathcal L_{\mathrm{latent}}=\frac{1}{K}\sum_{h=1}^{K}\left\lVert\hat z_{t+h}-\bar z_{t+h}\right\rVert_2^2\]</div>
+          <p>锚定每一个未来状态，防止模型只学累计量却丢掉真实的反事实 rollout。</p>
+        </article>
+        <article>
+          <div><span>L2</span><h3>Direct successor</h3></div>
+          <div class="display-math">\[\mathcal L_{\mathrm{SF}}=\frac{1}{K}\sum_{h=1}^{K}\left\lVert\hat S_h-Y_h\right\rVert_2^2\]</div>
+          <p>给长期累计特征一个直接、真实的多时域监督，而不是仅靠 rollout 间接求和。</p>
+        </article>
+        <article>
+          <div><span>L3</span><h3>Overlap consistency</h3></div>
+          <div class="display-math">\[\mathcal L_{\mathrm{overlap}}=\frac{1}{K}\sum_{h=1}^{K}\left\lVert\hat S_h-\operatorname{sg}\!\left[\sum_{j=1}^{h}\gamma^{j-1}\hat\psi_{t+j}\right]\right\rVert_2^2\]</div>
+          <p>让 successor head 对齐 latent rollout 的累计。初版只让梯度流向 \(\hat S\)；latent head 已由 L1 直接锚定，避免 consistency 自己制造移动目标。</p>
+        </article>
+      </div>
+
+      <div class="total-objective">
+        <p class="label">完整目标</p>
+        <div class="display-math">
+          \[
+            \mathcal L
+            =
+            \mathcal L_{\mathrm{SIGReg}}
+            +
+            \lambda_z\mathcal L_{\mathrm{latent}}
+            +
+            \lambda_S\mathcal L_{\mathrm{SF}}
+            +
+            \lambda_C\mathcal L_{\mathrm{overlap}}
+          \]
+        </div>
+      </div>
+    </section>
+
+    <section class="section code-section" id="code">
+      <div class="section-heading">
+        <p class="section-index">04 / IMPLEMENTATION SKETCH</p>
+        <h2>训练代码里，关键是先构造全部 \(K\) 个真实 successor target，再让两个 head 交叉校准。</h2>
+      </div>
+
+      <div class="code-grid">
+        <article>
+          <p class="label">PyTorch 训练核心</p>
+          <pre><code>def successor_loss(
+    batch, model, target_model, gamma, horizon
+):
+    history = make_history(
+        batch.obs, batch.actions
+    )
+    action_prefix = batch.actions[:, :horizon]
+
+    z_hat, s_hat = model(
+        history, action_prefix
+    )
+    with torch.no_grad():
+        z_target = target_model.encode(
+            batch.future_obs[:, :horizon]
+        )
+        psi_target = normalize(
+            target_model.project(z_target)
+        )
+
+    discount = gamma ** torch.arange(
+        horizon, device=z_hat.device
+    )
+    y = torch.cumsum(
+        discount[None, :, None] * psi_target,
+        dim=1,
+    )
+
+    latent = F.mse_loss(z_hat, z_target)
+    successor = F.mse_loss(s_hat, y)
+
+    psi_hat = normalize(
+        model.project(z_hat)
+    )
+    rollout_sum = torch.cumsum(
+        discount[None, :, None] * psi_hat,
+        dim=1,
+    )
+    overlap = F.mse_loss(
+        s_hat, rollout_sum.detach()
+    )
+
+    return latent, successor, overlap</code></pre>
+        </article>
+
+        <article>
+          <p class="label">CEM cost 接口</p>
+          <pre><code>def candidate_cost(
+    history,
+    candidate_actions,
+    goal_obs,
+    gamma,
+):
+    # candidate_actions: (N, K, action_dim)
+    # history and goal are broadcast to N.
+    _, s_hat = model(
+        history, candidate_actions
+    )
+
+    goal_z = model.encode(goal_obs)
+    psi_goal = normalize(
+        model.project(goal_z)
+    )
+    horizon = candidate_actions.shape[1]
+    discount = gamma ** torch.arange(
+        horizon, device=s_hat.device
+    )
+    z_k = discount.sum()
+    score = (
+        s_hat[:, -1] * psi_goal
+    ).sum(dim=-1) / z_k
+
+    # All horizon costs are included.
+    return 1.0 - score</code></pre>
+        </article>
+      </div>
+
+      <div class="implementation-notes">
+        <div><strong>输出 shape</strong><span>\(\hat z:(B,K,d_z)\)，\(\hat S:(B,K,d_\psi)\)。当前实现的 `(B,16)` 若代表 16 个不同 future goals，不是本方案要的 horizon ladder。</span></div>
+        <div><strong>规划规则</strong><span>CEM 给完整 \(K\) 步动作并直接最小化 \(\hat C_K\)。不要再加一个相同 horizon 的 terminal latent distance，否则会 double count。</span></div>
+        <div><strong>训练顺序</strong><span>先跑 \(\lambda_C=0\) 的 latent + direct successor 版本；确认二者预测质量后，再逐步打开 overlap consistency。</span></div>
+      </div>
+    </section>
+
+    <section class="section tint" id="boundary">
+      <div class="section-heading">
+        <p class="section-index">05 / INVARIANTS AND LIMITS</p>
+        <h2>这套方案成立的前提，以及它明确不解决什么。</h2>
+      </div>
+      <div class="invariant-grid">
+        <article><span>01</span><h3>无 hidden continuation policy</h3><p>如果 score 的 horizon 是 \(K\)，CEM 必须提供 \(K\) 个动作。想估计更远未来，就增加 action prefix 或显式引入 policy；没有第三种免费语义。</p></article>
+        <article><span>02</span><h3>Value 是读出，不是新模型</h3><p>goal 只在规划时通过 \(\psi_g\) 进入点积。训练 \(S_h\) 时不需要采样 goal，不需要为每一个 future goal 拟合 scalar MC target。</p></article>
+        <article><span>03</span><h3>OOD 仍是核心风险</h3><p>CEM 会偏好模型低估 cost 的动作前缀。评测必须单独报告候选排名、不同 horizon 的 latent error 和真实环境成功率。</p></article>
+      </div>
+      <div class="closing">
+        <strong>最终一句话：</strong>
+        <span>模型学习的是“候选动作前缀对应的未来特征序列”；目标 value 只是从这个通用向量表示中读取出来。</span>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Reward-Free Successor LeWM · Technical specification · TD-JEPA inspired</p>
+    <p>方法假设尚需受控、多随机种子实验验证。</p>
+  </footer>
+</body>
+</html>

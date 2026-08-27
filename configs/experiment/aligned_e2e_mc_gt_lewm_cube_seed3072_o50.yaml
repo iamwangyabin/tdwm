@@ -1,0 +1,126 @@
+schema_version: 1
+id: aligned_e2e_mc_gt_lewm_cube_seed3072_epoch10_o50
+method: aligned_e2e_mc_gt_lewm
+display_name: Aligned E2E MC-GT-LeWM
+environment: cube
+stage: planner_evaluation
+
+runtime:
+  stable_worldmodel_version: 0.1.1
+  import: import stable_worldmodel as swm
+  precision: fp32
+
+image_preprocessing:
+  source: stable_pretraining.data.dataset_stats.ImageNet
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+dataset:
+  identifier: quentinll/lewm-cube
+  format: lance
+  expected_episodes: 10000
+  expected_transitions: 2010000
+  episode_steps: 201
+  lance:
+    manifest_suffix: .manifest.json
+    image_codec: jpeg
+    jpeg_quality: 100
+  keys_to_load:
+    - pixels
+    - action
+    - qpos
+    - qvel
+    - privileged_block_0_pos
+    - privileged_block_0_quat
+  evaluation_split:
+    population: all valid start rows across all 10000 dataset episodes
+    sampler: stable-worldmodel-0.1.1-valid-row-sampler
+    replacement: false
+
+base_checkpoint:
+  source: aligned_e2e_mc_gt_lewm_training_export
+  training_protocol: aligned_e2e_mc_gt_lewm_cube_train.yaml
+  initialization: random_from_scratch
+  seed: 3072
+  epoch: 10
+  selection: locked_final_epoch
+  parameters: 18034628
+  sha256: 31c5ce04e9b5eec66e1015aa4d8318ccac2d4fa980a2f49937e70db56c653e72
+
+value_checkpoint:
+  source: aligned_e2e_mc_gt_lewm_cube_train.yaml
+  seed: 3072
+  epoch: 10
+  objective_version: 2
+  parameters: 682497
+  includes_world_model_state: true
+  sha256: 1912e444000888ef0beb1a8a0fd902292f7c5caf7bbb384500487526602adcea
+
+tail_value:
+  objective_version: 2
+  objective: supervised_mc
+  architecture: squared_shared_potential_anchor
+  boundary_condition: exact_current_goal_zero
+  training_input: lewm_predicted_terminal_history
+  continuation_policy: offline_dataset_behavior
+  model_rollout_horizon: 5
+  history_size: 3
+  latent_dim: 192
+  history_dim: 626
+  action_block_dim: 25
+  hidden_dim: 512
+  max_goal_offset: 16
+  gamma: 0.95
+  weight: 1.0
+  target_cost_reduction: mean
+  upstream_terminal_cost_reduction: sum
+  upstream_scale_factor: 192
+
+world:
+  env_name: swm/OGBCube-v0
+  env_type: single
+  ob_type: states
+  image_size: 224
+  multiview: false
+  visualize_info: false
+  terminate_at_goal: true
+  success_threshold_meters: 0.04
+  success_definition: target cube center is within 0.04 m of the target position
+
+evaluation:
+  episodes: 50
+  goal_offset: 50
+  start_goal_source: same dataset episode
+  requires_tail_beyond_planning_horizon: true
+
+context:
+  training_history_frames: 3
+  predictor_recurrent_window: 3
+  plan_config_history_len: 1
+  effective_observed_frames_at_first_plan: 1
+
+planning:
+  solver: CEM
+  horizon: 5
+  candidates: 300
+  iterations: 30
+  elites: 30
+  initial_variance: 1.0
+  action_block: 5
+  frame_skip: 5
+  receding_horizon: 1
+  executed_environment_steps_before_replanning: 5
+  episode_budget: 100
+  planning_seed: 42
+  solver_batch_size: 1
+  warm_start: true
+  plan_config_history_len: 1
+
+comparison:
+  baseline_protocol: configs/experiment/lewm_cube_seed3072_o50.yaml
+  controlled_difference: jointly trained LeWM plus boundary-anchored MC goal-tail value
+
+provenance:
+  training_protocol: configs/experiment/aligned_e2e_mc_gt_lewm_cube_train.yaml
+  training_git_revision: b9a33a75188d7971ac9225c9078624c580c8c68f
+  status: locked_epoch10_checkpoint_available
